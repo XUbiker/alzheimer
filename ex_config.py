@@ -7,7 +7,7 @@ _codes = {
     'AD-NC': { 'NC': 0, 'AD': 1 },
 }
 
-def get_label_families(label=None):
+def get_bin_label_families(label=None):
     return {
         None:  ('AD-MCI', 'MCI-NC', 'AD-NC'),
         'AD':  ('AD-MCI', 'AD-NC'),

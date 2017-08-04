@@ -39,27 +39,6 @@ def crop_border(data, crop_prc, shift_prc):
         print('cropping data:', data.shape, '->', data_new.shape)
         return data_new    
 
-def augment(data, max_shift, augm_params):
-
-    # augm_params should be a tuple of 4 elements: shift_x, shift_y, shift_z, blur_sigma
-    if data.ndim != 3 or len(augm_params) != 4: raise NameError('invalid input')
-    
-    import numpy as np
-    from scipy.ndimage.filters import gaussian_filter
-    
-    shift_x = augm_params[0]
-    shift_y = augm_params[1]
-    shift_z = augm_params[2]
-    blur_sigma = augm_params[3]
-    
-    s_x, s_y, s_z = (data.shape[0] - 2 * max_shift, data.shape[1] - 2 * max_shift, data.shape[2] - 2 * max_shift)
-
-    blurred = data if blur_sigma == 0 else gaussian_filter(data, sigma = blur_sigma)
-    sub_data = blurred[max_shift + shift_x : s_x + max_shift + shift_x,
-                       max_shift + shift_y : s_y + max_shift + shift_y,
-                       max_shift + shift_z : s_z + max_shift + shift_z]
-    return sub_data    
-    
 def debug_plot_median_slices(np_data, print_slices=False):
     import matplotlib.pyplot as plt
     x, y, z = np_data.shape
