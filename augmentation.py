@@ -1,3 +1,5 @@
+import numpy.random as rnd
+
 class AugmParams:
     def __init__(self, shift=(0, 0, 0), sigma=0.0):
         self.shift = shift
@@ -6,8 +8,7 @@ class AugmParams:
         return '::' + str(self.shift) + ', ' + str(self.sigma) + '::'
     def __repr__(self):
         return str(self)
-    def tranc_random(max_augm_params):
-        import numpy.random as rnd
+    def trunc_random(max_augm_params):
         max_shift = max_augm_params.shift
         max_blur = max_augm_params.sigma
         while True:
@@ -21,13 +22,12 @@ class AugmParams:
             
 def augment(data, augm_params, max_augm_params):
 
-    import numpy as np
     from scipy.ndimage.filters import gaussian_filter
     
     blur_sigma = augm_params.sigma
     shift = augm_params.shift
     max_shift = max_augm_params.shift
-    
+
     size = (
                 data.shape[0] - 2 * max_shift[0],
                 data.shape[1] - 2 * max_shift[1],
@@ -38,5 +38,5 @@ def augment(data, augm_params, max_augm_params):
     sub_data = blurred[max_shift[0] + shift[0] : size[0] + max_shift[0] + shift[0],
                        max_shift[1] + shift[1] : size[1] + max_shift[1] + shift[1],
                        max_shift[2] + shift[2] : size[2] + max_shift[2] + shift[2]]
-    return sub_data    
+    return sub_data
     

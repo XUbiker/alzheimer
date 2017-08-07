@@ -1,3 +1,5 @@
+import random as rnd
+
 class XSetItem:
     def __init__(self, label, image_dirs, augm_params):
         self.label = label
@@ -17,7 +19,6 @@ class XSet:
     def add_all(self, other_set):
         self.items.extend(other_set.items)
     def shuffle(self):
-        import numpy.random as rnd
         rnd.shuffle(self.items)
     def print(self):
         print('%s (%d instances):' % (self.name, len(self.items)))
