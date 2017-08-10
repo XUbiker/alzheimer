@@ -1,8 +1,6 @@
-import os
-
 caffe_folder = '/home/xubiker/dev/caffe_modified/'
 
-h5_cache_dir = os.getcwd() + './h5_cache/'
+h5_cache_dir = 'c:/dev/alzheimer/h5_cache/'
 
 _codes = {
     'ternary': { 'NC': 0, 'MCI': 1, 'AD': 2 },
@@ -27,6 +25,6 @@ def load_caffe(caffe_root=caffe_folder):
     pcr = caffe_root + "/python"
     if not pcr in sys.path:
         sys.path.append(pcr)
-        
+
     import caffe
     print('caffe', caffe.__version__, 'loaded')  
