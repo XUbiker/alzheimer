@@ -39,4 +39,3 @@ def augment(data, augm_params, max_augm_params):
                        max_shift[1] + shift[1] : size[1] + max_shift[1] + shift[1],
                        max_shift[2] + shift[2] : size[2] + max_shift[2] + shift[2]]
     return sub_data
-    

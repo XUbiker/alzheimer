@@ -1,4 +1,8 @@
+import os
+
 caffe_folder = '/home/xubiker/dev/caffe_modified/'
+
+h5_cache_dir = os.getcwd() + './h5_cache/'
 
 _codes = {
     'ternary': { 'NC': 0, 'MCI': 1, 'AD': 2 },
