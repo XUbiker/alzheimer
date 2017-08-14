@@ -23,3 +23,10 @@ class XSet:
     def print(self):
         print('%s (%d instances):' % (self.name, len(self.items)))
         for i in self.items: print(i)
+
+
+def unite_sets(source_sets, united_name):
+    united_set = XSet(united_name)
+    for s in source_sets:
+        united_set.items.extend(s.items)
+    return united_set
