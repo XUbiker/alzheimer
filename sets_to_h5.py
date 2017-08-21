@@ -7,51 +7,84 @@ import os
 import ex_config as cfg
 import xsets
 
-
 adni_root = 'C:/dev/ADNI_Multimodal/dataset/'
-h5_subdir = '/rois/'
-sets_path = 'sets_5.pkl'
+h5_outdir = '/rois_10/'
+sets_path = './sets/sets_10.pkl'
+
 crop_params = {'shift': (0, 0, -0.05), 'prc': (0.05, 0.05, 0.05)}
-crop_roi_params = (65-2, 92+1-2, 58-2, 85+1-2, 31-2, 58+1-2) # max_shift substracted
+
+hippo_roi_L = (65 - 2, 92 + 1 - 2, 58 - 2, 85 + 1 - 2, 31 - 2, 58 + 1 - 2) # (x_min, x_max, y_min, y_max, z_min, z_max)
+hippo_roi_R = (30 - 2, 57 + 1 - 2, 58 - 2, 85 + 1 - 2, 31 - 2, 58 + 1 - 2) # (x_min, x_max, y_min, y_max, z_min, z_max)
+
+hippo_roi_L_ext = (65 - 2 - 5, 92 + 1 - 2 + 5, 58 - 2 - 5, 85 + 1 - 2 + 5, 31 - 2 - 5, 58 + 1 - 2 + 5) # (x_min, x_max, y_min, y_max, z_min, z_max)
+hippo_roi_R_ext = (30 - 2 - 5, 57 + 1 - 2 + 5, 58 - 2 - 5, 85 + 1 - 2 + 5, 31 - 2 - 5, 58 + 1 - 2 + 5) # (x_min, x_max, y_min, y_max, z_min, z_max)
+
+hippo_roi_rev_L = (31 - 2, 58 + 1 - 2, 58 - 2, 85 + 1 - 2, 65 - 2, 92 + 1 - 2) # (z_min, z_max, y_min, y_max, x_min, x_max)
+hippo_roi_rev_R = (31 - 2, 58 + 1 - 2, 58 - 2, 85 + 1 - 2, 30 - 2, 57 + 1 - 2) # (z_min, z_max, y_min, y_max, x_min, x_max)
+
+hippo_roi_rev_L_ext = (31 - 2 - 5, 58 + 1 - 2 + 5, 58 - 2 - 5, 85 + 1 - 2 + 5, 65 - 2 - 5, 92 + 1 - 2 + 5) # (z_min, z_max, y_min, y_max, x_min, x_max)
+hippo_roi_rev_R_ext = (31 - 2 - 5, 58 + 1 - 2 + 5, 58 - 2 - 5, 85 + 1 - 2 + 5, 30 - 2 - 5, 57 + 1 - 2 + 5) # (z_min, z_max, y_min, y_max, x_min, x_max)
+
+use_crops = {
+    hippo_roi_L: 'L',
+    hippo_roi_R: 'R',
+    hippo_roi_rev_L: 'rev_L',
+    hippo_roi_rev_R: 'rev_R',
+    hippo_roi_L_ext: 'L_ext',
+    hippo_roi_R_ext: 'R_ext',
+    hippo_roi_rev_L_ext: 'rev_L_ext',
+    hippo_roi_rev_R_ext: 'rev_R_ext'
+}
 
 max_augm_params = augm.AugmParams(shift=(2, 2, 2))
-
 scale = 1.0 / 256
 
-if not os.path.exists(cfg.h5_cache_dir + h5_subdir):
-    os.makedirs(cfg.h5_cache_dir + h5_subdir)
+if not os.path.exists(cfg.h5_cache_dir + h5_outdir):
+    os.makedirs(cfg.h5_cache_dir + h5_outdir)
 
 with open(sets_path, 'rb') as f:
     train, valid, test = pickle.load(f)
 
-preprocess = lambda item: pp.full_preprocess(item, adni_root, np.float32, max_augm_params, img_index=0, crop_roi_params=crop_roi_params)
+preproc = lambda item, index, crop_params: pp.full_preprocess(item, adni_root, np.float32, max_augm_params, img_index=index, crop_roi_params=crop_params)
 
-def write_set(xset):
-    f = h5py.File(cfg.h5_cache_dir + h5_subdir + xset.name + '.h5', 'w')
-    shape = preprocess(xset.items[0]).shape
+def write_set(xset, use_smri=True, use_md=False):
+    f = h5py.File(cfg.h5_cache_dir + h5_outdir + xset.name + '.h5', 'w')
     size = xset.size()
-    data = f.create_dataset('data/smri', shape = (size,) + shape, dtype=np.float32)
-    labels = f.create_dataset('labels', shape = (size,), dtype=np.float32)
+    labels = f.create_dataset('labels', shape=(size,), dtype=np.float32)
+    for crop in use_crops:
+        print('processing crop %s\n' % use_crops[crop])
+        shape = preproc(xset.items[0], 0, crop).shape
+        data_smri = f.create_dataset('data/smri_' + use_crops[crop], shape = (size,) + shape, dtype=np.float32)
+        data_md = f.create_dataset('data/md_' + use_crops[crop], shape = (size,) + shape, dtype=np.float32)
+        for i in range(size):
+            print('writing instance %d of %d' % (i+1, size))
+            if use_smri:
+                data_smri[i] = preproc(xset.items[i], 0, crop) * scale
+            if use_md:
+                data_md[i] = preproc(xset.items[i], 1, crop) * scale
     for i in range(size):
-        print('writing instance %d of %d' % (i+1, size))
-        data[i] = preprocess(xset.items[i]) * scale
         labels[i] = cfg.get_label_code('ternary', xset.items[i].label)
     f.close()
+    print('done!')
 
-def test_set(xset):
-    f = h5py.File(cfg.h5_cache_dir + h5_subdir + xset.name + '.h5', 'r')
-    data = f['data/smri']
-    labels = f['labels']
-    print(data.shape)
-    for i in range(data.shape[0]):
-        print(data[i].shape)
-        print(labels[i])
-    f.close()
+# def test_set(xset):
+#     f = h5py.File(cfg.h5_cache_dir + h5_outdir + xset.name + '.h5', 'r')
+#     data_smri = f['data/smri']
+#     data_smri2 = f['data/smri2']
+#     data_md = f['data/md']
+#     labels = f['labels']
+#     print(data_smri.shape)
+#     for i in range(data_smri.shape[0]):
+#         print(data_smri[i].shape)
+#         print(data_smri2[i].shape)
+#         print(data_md[i].shape)
+#         print(labels[i])
+#     f.close()
 
 
 train_valid = xsets.unite_sets([train, valid], 'alz_train_eval')
 
 write_set(train_valid)
 write_set(test)
-test_set(train_valid)
-test_set(test)
+# test_set(train_valid)
+# test_set(test)

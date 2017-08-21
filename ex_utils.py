@@ -1,10 +1,14 @@
+import os
+import nibabel as nib
+import numpy as np
+import matplotlib.pyplot as plt
+import pickle
+
 def save_pickle(obj, file_path):
-    import pickle
     with open(file_path, 'wb') as f:
         pickle.dump(obj, f)
 
 def get_nii_from_folder(folder):
-    import os
     res = []
     for root, dirs, files in os.walk(folder):
         for file in files:
@@ -15,9 +19,6 @@ def get_nii_from_folder(folder):
     return res
 
 def nii_to_array(nii_filename, data_type, fix_nan=True):
-    import os
-    import nibabel as nib
-    import numpy as np
     img = nib.load(nii_filename)
     np_data = img.get_data().astype(data_type)
     if fix_nan:
@@ -25,7 +26,6 @@ def nii_to_array(nii_filename, data_type, fix_nan=True):
     return np_data
 
 def crop_border(data, crop_prc, shift_prc):
-    import numpy as np
     dims = np.array(data.shape).astype(np.float)
     pads = np.round(dims * np.array(crop_prc).astype(np.float)).astype(np.int)
     shifts = np.round(dims * np.array(shift_prc).astype(np.float)).astype(np.int)
@@ -40,7 +40,6 @@ def crop_border(data, crop_prc, shift_prc):
         return data_new    
 
 def debug_plot_median_slices(np_data, print_slices=False):
-    import matplotlib.pyplot as plt
     x, y, z = np_data.shape
     slc = np_data[:, :, z//2]
     if print_slices: print(slc)

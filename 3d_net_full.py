@@ -2,16 +2,12 @@ import tensorflow as tf
 import pickle
 import numpy as np
 import math
-import augmentation as augm
-import preprocess as pp
 import matplotlib.pyplot as plt
 import ex_config as cfg
 import h5py
 
 adni_root = 'C:/dev/ADNI_Multimodal/dataset/'
 sets_path = 'sets.pkl'
-crop_params = {'shift': (0, 0, -0.05), 'prc': (0.05, 0.05, 0.05)}
-max_augm_params = augm.AugmParams(shift=(2, 2, 2))
 
 label_dict = {'NC': 0, 'MCI': 1, 'AD': 2}
 
@@ -24,7 +20,7 @@ test_h5 = h5py.File(cfg.h5_cache_dir + test.name + '.h5', 'r')
 
 
 batch_size = 3
-img_shape = pp.full_preprocess(train.items[0], adni_root, np.float, max_augm_params, crop_params=crop_params).shape
+img_shape = train_h5['data/smri'][0].shape
 input_shape = [batch_size] + list(img_shape) + [1]
 
 learning_rate = 0.005

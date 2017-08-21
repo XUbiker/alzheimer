@@ -1,6 +1,7 @@
+import ex_utils
+import augmentation as augm
+
 def full_preprocess(set_item, adni_root, data_type, max_augm_params, img_index = 0, crop_params=None, crop_roi_params=None):
-    import ex_utils
-    import augmentation as augm
     nii = ex_utils.get_nii_from_folder(adni_root + set_item.image_dirs[img_index])[0]
     array = ex_utils.nii_to_array(nii, data_type)
     if crop_params != None:
