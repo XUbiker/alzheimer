@@ -7,9 +7,8 @@ import os
 import ex_config as cfg
 import xsets
 
-adni_root = 'C:/dev/ADNI_Multimodal/dataset/'
 h5_outdir = '/rois_10/'
-sets_path = './sets/sets_10.pkl'
+set_name = 'sets_10.pkl'
 
 crop_params = {'shift': (0, 0, -0.05), 'prc': (0.05, 0.05, 0.05)}
 
@@ -42,10 +41,10 @@ scale = 1.0 / 256
 if not os.path.exists(cfg.h5_cache_dir + h5_outdir):
     os.makedirs(cfg.h5_cache_dir + h5_outdir)
 
-with open(sets_path, 'rb') as f:
+with open(cfg.sets_dir + set_name, 'rb') as f:
     train, valid, test = pickle.load(f)
 
-preproc = lambda item, index, crop_params: pp.full_preprocess(item, adni_root, np.float32, max_augm_params, img_index=index, crop_roi_params=crop_params)
+preproc = lambda item, index, crop_params: pp.full_preprocess(item, cfg.adni_root, np.float32, max_augm_params, img_index=index, crop_roi_params=crop_params)
 
 def write_set(xset, use_smri=True, use_md=False):
     f = h5py.File(cfg.h5_cache_dir + h5_outdir + xset.name + '.h5', 'w')
@@ -83,8 +82,17 @@ def write_set(xset, use_smri=True, use_md=False):
 
 
 train_valid = xsets.unite_sets([train, valid], 'alz_train_eval')
-
+print(train_valid.name, train_valid.size())
 write_set(train_valid)
 write_set(test)
+train_binary_sets = xsets.split_to_binary_sets(train_valid)
+test_binary_sets = xsets.split_to_binary_sets(test)
+for i in train_binary_sets:
+    print(i.name, i.size())
+    write_set(i)
+for i in test_binary_sets:
+    print(i.name, i.size())
+    write_set(i)
+
 # test_set(train_valid)
 # test_set(test)

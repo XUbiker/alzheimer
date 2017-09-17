@@ -30,3 +30,14 @@ def unite_sets(source_sets, united_name):
     for s in source_sets:
         united_set.items.extend(s.items)
     return united_set
+
+def split_to_binary_sets(source_set):
+    unique_labels = sorted(set(map(lambda item: item.label, source_set.items)))
+    binary_sets = []
+    for i in range(len(unique_labels)-1):
+        for j in range(i+1, len(unique_labels)):
+            print('processing set with labels:', unique_labels[i], unique_labels[j])
+            new_name = source_set.name + '_' + unique_labels[i] + '_' + unique_labels[j]
+            new_items = [item for item in source_set.items if item.label == unique_labels[i] or item.label == unique_labels[j]]
+            binary_sets.append(XSet(new_name, new_items))
+    return binary_sets

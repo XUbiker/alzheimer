@@ -1,33 +1,34 @@
 import numpy.random as rnd
 import augmentation as augm
-import numpy as np
+import math
+import os
+from xsets import XSet, XSetItem
+import ex_config as cfg
+
 
 def generate_augm_set(dirs_with_labels, new_size, max_augm_params):
-    import math
-    from augmentation import AugmParams
-    from xsets import XSet, XSetItem
-    
+
     xset = XSet()
     
     if new_size == None or len(dirs_with_labels) == new_size:
         for d in dirs_with_labels:
-            xset.add(XSetItem(label=d[0], image_dirs=(d[1], d[2]), augm_params=AugmParams()))
+            xset.add(XSetItem(label=d[0], image_dirs=(d[1], d[2]), augm_params=augm.AugmParams()))
         return xset
     
     augm_coeff = int(math.floor(new_size / len(dirs_with_labels)))
 
     i = 0
     for d in dirs_with_labels:
-        xset.add(XSetItem(label=d[0], image_dirs=(d[1], d[2]), augm_params=AugmParams()))
+        xset.add(XSetItem(label=d[0], image_dirs=(d[1], d[2]), augm_params=augm.AugmParams()))
         i += 1
         for _ in range(augm_coeff-1):
-            p = AugmParams.trunc_random(max_augm_params)
+            p = augm.AugmParams.trunc_random(max_augm_params)
             xset.add(XSetItem(label=d[0], image_dirs=(d[1], d[2]), augm_params=p))
             i += 1
     while i < new_size:
         ridx = rnd.randint(len(dirs_with_labels))
         d = dirs_with_labels[ridx]
-        p = AugmParams.trunc_random(max_augm_params)
+        p = augm.AugmParams.trunc_random(max_augm_params)
         xset.add(XSetItem(label=d[0], image_dirs=(d[1], d[2]), augm_params=p))
         i += 1
     return xset
@@ -35,9 +36,6 @@ def generate_augm_set(dirs_with_labels, new_size, max_augm_params):
 
 def generate_samples_from_adni2(adni_root, max_augm_params, augm_factor, prefix_name='alz', valid_prc = 0.25, test_prc = 0.25, shuffle_data=True, debug=True):
     
-    import os
-    from xsets import XSet
-
     stage_dirs = {
         'AD': '/AD/',
         'MCI': '/MCI/',
@@ -106,8 +104,7 @@ def generate_samples_from_adni2(adni_root, max_augm_params, augm_factor, prefix_
 
 
 lists_params = {
-    'adni_root': 'C:/dev/ADNI_Multimodal/dataset/',
-    # 'adni_root': '/home/xubiker/ADNI_Multimodal/dataset/',
+    'adni_root': cfg.adni_root,
     'prefix_name': 'alz',
     'max_augm': augm.AugmParams(shift=(2, 2, 2), sigma=1.2),
     'test_prc': 0.25,
