@@ -10,23 +10,26 @@ import os
 
 logs = sorted(os.listdir("./logs/"))
 log_id = 0 if not logs else int(logs[-1])+1
-log_name = str(log_id).zfill(4)
-log = XLogger('./logs/' + log_name)
+experiment_name = str(log_id).zfill(4)
+log = XLogger('./logs/' + experiment_name, full_format=False)
 
 
 class Params:
     def __init__(self):
-        self.h5_train_path = cfg.h5_cache_dir + '/rois_10/alz_train_eval_AD_NC.h5'
+        # self.h5_train_path = cfg.h5_cache_dir + '/rois_10/alz_train_eval_AD_NC.h5'
+        # self.h5_test_path = cfg.h5_cache_dir + '/rois_10/alz_test_ext_AD_NC.h5'
+        self.h5_train_path = cfg.h5_cache_dir + '/rois_10/alz_test_AD_NC.h5'
         self.h5_test_path = cfg.h5_cache_dir + '/rois_10/alz_test_AD_NC.h5'
-        self.h5_smri_path = 'data/smri_L_ext'
-        self.h5_md_path = 'data/smri_R_ext'
+        self.h5_smri_path = 'data/smri_LR'
+        self.h5_md_path = 'data/md_LR'
+        self.h5_labels_path = 'labels/labels_LR'
         self.train_batch_size = 35
         self.eval_batch_size = 1
         self.test_batch_size = 1
         self.learning_rate = 0.005
         self.target_size = 3
         self.num_channels = 1
-        self.generations = 600
+        self.generations = 1200
         self.eval_every = 20
         self.cv_reshuffle_every = 500
         self.print_weights_every = 500
@@ -42,7 +45,7 @@ class Params:
         self.dropout_test = 1.0
 
     def __str__(self):
-        return '\n'.join("%s: %s" % item for item in vars(self).items())
+        return '\n'.join("%s: %s" % item for item in sorted(vars(self).items()))
 
 
 p = Params()
@@ -53,10 +56,10 @@ test_h5 = h5py.File(p.h5_test_path, 'r')
 
 train_data_smri = train_eval_h5[p.h5_smri_path]
 train_data_md = train_eval_h5[p.h5_md_path]
-train_labels = train_eval_h5['labels']
+train_labels = train_eval_h5[p.h5_labels_path]
 test_data_smri = test_h5[p.h5_smri_path]
 test_data_md = test_h5[p.h5_md_path]
-test_labels = test_h5['labels']
+test_labels = test_h5[p.h5_labels_path]
 
 
 def cross_validation_reshuffle(train_eval_data, prc=0.9):
@@ -386,7 +389,8 @@ plt.plot(eval_indices, saved_train_loss, 'k-')
 plt.title('Softmax loss per generation')
 plt.xlabel('Generation')
 plt.ylabel('Softmax Loss')
-plt.show()
+# plt.show()
+plt.savefig('./plots/' + experiment_name + '_loss.png')
 # Plot train and eval accuracy
 plt.plot(eval_indices, saved_train_acc, 'k-', label='Train set accuracy')
 plt.plot(eval_indices, saved_eval_acc, 'g-', label='Validation set accuracy')
@@ -395,9 +399,10 @@ plt.title('Train, validation and test accuracy')
 plt.xlabel('Generation')
 plt.ylabel('Accuracy')
 plt.legend(loc='lower right')
-plt.show()
+# plt.show()
+plt.savefig('./plots/' + experiment_name + '_accuracy.png')
 
 train_eval_h5.close()
 test_h5.close()
 
-log.get().close()
+log.get().info("\nDONE!")
