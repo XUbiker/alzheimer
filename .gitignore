@@ -12,3 +12,5 @@ temp/
 *.pkl
 
 logs/
+
+plots/
