@@ -16,28 +16,26 @@ log = XLogger('./logs/' + experiment_name, full_format=False)
 
 class Params:
     def __init__(self):
-        # self.h5_train_path = cfg.h5_cache_dir + '/rois_10/alz_train_eval_AD_NC.h5'
-        # self.h5_test_path = cfg.h5_cache_dir + '/rois_10/alz_test_ext_AD_NC.h5'
         self.h5_train_path = cfg.h5_cache_dir + '/rois_10/alz_train_eval_AD_NC.h5'
-        self.h5_test_path = cfg.h5_cache_dir + '/rois_10/alz_test_AD_NC.h5'
-        self.h5_series_path = ('data/smri_LR', 'data/md_LR')
+        self.h5_test_path = cfg.h5_cache_dir + '/rois_10/alz_test_ext_AD_NC.h5'
+        self.h5_series_path = ('data/smri_L', 'data/smri_R', 'data/md_L', 'data/md_R')
         self.n_series = len(self.h5_series_path)
-        self.h5_labels_path = 'labels/labels_LR'
-        self.train_batch_size = 35
+        self.h5_labels_path = 'labels/labels_L'
+        self.train_batch_size = 10
         self.eval_batch_size = 1
         self.test_batch_size = 1
         self.learning_rate = 0.005
         self.target_size = 3
         self.num_channels = 1
-        self.generations = 100
+        self.generations = 1500
         self.eval_every = 20
         self.cv_reshuffle_every = 500
         self.print_weights_every = 500
-        self.conv_kernels = (5, 4, 3)
-        self.pool_kernels = (2, 2, 2)
-        self.conv_features = (16, 32, 64)
+        self.conv_kernels = (5, 4, 3, 3, 3)
+        self.pool_kernels = (2, 2, 2, 2, 3)
+        self.conv_features = (16, 32, 64, 128, 256)
         self.n_conv_layers = len(self.conv_kernels)
-        self.fc_features = (16,)
+        self.fc_features = (8,)
         self.n_fc_layers = len(self.fc_features)
         self.dropout_train = 0.5
         self.dropout_eval = 1.0
@@ -106,7 +104,7 @@ for i in range(p.n_series):
         cv_w[l].append(create_var('W' + str(l) + '_' + str(i), shape=[conv_ker, conv_ker, conv_ker, prev_f, curr_f]))
 
 # --- Create variable for fully-connected layers ---
-fc1_in_size = calc_size_after_pooling(train_input_shape[1:4], p.pool_kernels) * p.conv_features[-1] * 2
+fc1_in_size = calc_size_after_pooling(train_input_shape[1:4], p.pool_kernels) * p.conv_features[-1] * p.n_series
 fc_w = []
 for i in range(p.n_fc_layers):
     prev_fc = fc1_in_size if i == 0 else p.fc_features[i-1]
@@ -251,8 +249,7 @@ for i in range(p.generations):
         train_idx, eval_idx = cross_validation_reshuffle(train_data[0])
     # ---------- train ----------
     r_idx = np.random.choice(train_idx, size=p.train_batch_size)
-    train_x = (np.asarray(get_h5_data(train_data[0], r_idx)),
-               np.asarray(get_h5_data(train_data[1], r_idx)))
+    train_x = tuple(np.asarray(get_h5_data(j, r_idx)) for j in train_data)
     train_y = np.asarray(get_h5_labels(train_labels, r_idx))
     train_dict = {train_input: train_x, train_target: train_y, keep_prob: p.dropout_train}
     sess.run(train_step, feed_dict=train_dict)
@@ -269,8 +266,7 @@ for i in range(p.generations):
         preds = np.zeros(eval_idx.size, np.float32)
         targets = np.zeros(eval_idx.size, np.float32)
         for l in range(0, eval_idx.size, p.eval_batch_size):
-            eval_x = (np.asarray(get_h5_data(train_data[0], (eval_idx[l],))),
-                      np.asarray(get_h5_data(train_data[1], (eval_idx[l],))))
+            eval_x = tuple(np.asarray(get_h5_data(j, (eval_idx[l],))) for j in train_data)
             eval_y = get_h5_labels(train_labels, (eval_idx[l],))
             _preds = sess.run(eval_preds, feed_dict={eval_input: eval_x, eval_target: eval_y, keep_prob: p.dropout_eval})
             targets[l * p.eval_batch_size:(l + 1) * p.eval_batch_size] = eval_y
@@ -281,8 +277,7 @@ for i in range(p.generations):
         preds = np.zeros(test_data[0].shape[0], np.float32)
         targets = np.zeros(test_data[0].shape[0], np.float32)
         for l in range(0, test_data[0].shape[0], p.test_batch_size):
-            test_x = (np.asarray(get_h5_data(test_data[0], (l,))),
-                      np.asarray(get_h5_data(test_data[1], (l,))))
+            test_x = tuple(np.asarray(get_h5_data(j, (l,))) for j in test_data)
             test_y = get_h5_labels(test_labels, (l,))
             _preds = sess.run(test_preds, feed_dict={test_input: test_x, test_target: test_y, keep_prob: p.dropout_test})
             targets[l * p.test_batch_size:(l + 1) * p.test_batch_size] = test_y

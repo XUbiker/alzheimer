@@ -26,17 +26,21 @@ class AugmParams:
 
 
 class CropParams:
+
     # ROI sizes (x_min, x_max, y_min, y_max, z_min, z_max):
     hippo_roi_L = (65, 92, 58, 85, 31, 58)
     hippo_roi_R = (30, 57, 58, 85, 31, 58)
-    ext_s = 5  # additional size of extended roi in each direction
-    hippo_roi_L_ext = (65 - ext_s, 92 + ext_s, 58 - ext_s, 85 + ext_s, 31 - ext_s, 58 + ext_s)
-    hippo_roi_R_ext = (30 - ext_s, 57 + ext_s, 58 - ext_s, 85 + ext_s, 31 - ext_s, 58 + ext_s)
 
     def __init__(self, global_crop=None, roi_coords=None, axis_flip=(False, False, False)):
         self.global_crop = global_crop
         self.roi_coords = roi_coords
         self.axis_flip = axis_flip
+
+    @staticmethod
+    def expand_roi(roi, expand_size):
+        return (roi[0] - expand_size, roi[1] + expand_size,
+                roi[2] - expand_size, roi[3] + expand_size,
+                roi[4] - expand_size, roi[5] + expand_size)
 
     def __str__(self):
         return '<' + str(self.global_crop) + ', ' + str(self.roi_coords) + ', ' + str(self.axis_flip) + '>'
