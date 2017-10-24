@@ -4,11 +4,12 @@ import math
 import matplotlib.pyplot as plt
 import ex_config as cfg
 import h5py
+import results_processing
+import pickle
+import os
 from logger import XLogger
 
-import os
-
-logs = sorted(os.listdir("./logs/"))
+logs = sorted(l if '.' not in l else os.path.split(l)[0] for l in os.listdir("./logs/"))
 log_id = 0 if not logs else int(logs[-1])+1
 experiment_name = str(log_id).zfill(4)
 log = XLogger('./logs/' + experiment_name, full_format=False)
@@ -16,30 +17,33 @@ log = XLogger('./logs/' + experiment_name, full_format=False)
 
 class Params:
     def __init__(self):
-        self.h5_train_path = cfg.h5_cache_dir + '/rois_10/alz_train_eval_AD_NC.h5'
-        self.h5_test_path = cfg.h5_cache_dir + '/rois_10/alz_test_ext_AD_NC.h5'
+        self.h5_train_path = cfg.h5_cache_dir + '/sets_10/alz_train_eval_e5_AD_NC.h5'
+        self.h5_test_path = cfg.h5_cache_dir + '/sets_10/alz_test_ext_e5_AD_NC.h5'
         self.h5_series_path = ('data/smri_L', 'data/smri_R', 'data/md_L', 'data/md_R')
+        # self.h5_series_path = ('data/smri_L', 'data/smri_R')
+        # self.h5_series_path = ('data/smri_LR', 'data/md_LR')
         self.n_series = len(self.h5_series_path)
         self.h5_labels_path = 'labels/labels_L'
-        self.train_batch_size = 10
+        self.train_batch_size = 17
         self.eval_batch_size = 1
         self.test_batch_size = 1
-        self.learning_rate = 0.005
+        self.learning_rate = 0.002
         self.target_size = 3
         self.num_channels = 1
-        self.generations = 1500
-        self.eval_every = 20
+        self.generations = 40
+        self.eval_every = 10
         self.cv_reshuffle_every = 500
         self.print_weights_every = 500
-        self.conv_kernels = (5, 4, 3, 3, 3)
-        self.pool_kernels = (2, 2, 2, 2, 3)
-        self.conv_features = (16, 32, 64, 128, 256)
+        self.conv_kernels = (5, 4, 3, 3)
+        self.pool_kernels = (2, 2, 2, 2)
+        self.conv_features = (16, 32, 64, 128)
         self.n_conv_layers = len(self.conv_kernels)
-        self.fc_features = (8,)
+        self.fc_features = (16,)
         self.n_fc_layers = len(self.fc_features)
         self.dropout_train = 0.5
         self.dropout_eval = 1.0
         self.dropout_test = 1.0
+        self.acc_mean_intervals = (1, 5, 10, 20)
 
     def __str__(self):
         return '\n'.join("%s: %s" % item for item in sorted(vars(self).items()))
@@ -195,6 +199,8 @@ eval_output = fusion_network(eval_input, p.eval_batch_size, is_training=False)
 test_output = fusion_network(test_input, p.test_batch_size, is_training=False)
 
 train_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=train_output, labels=train_target))
+eval_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=eval_output, labels=eval_target))
+test_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=test_output, labels=test_target))
 
 train_logits = tf.nn.softmax(train_output)
 eval_logits = tf.nn.softmax(eval_output)
@@ -220,6 +226,14 @@ def get_accuracy(conf_matrix):
     return 100.0 * np.trace(conf_matrix) / np.sum(conf_matrix)
 
 
+def estimate_mean_accuracy(acc_values, set_name):
+    acc_string = set_name + ' mean acc (it|acc):\n'
+    for i in p.acc_mean_intervals:
+        m = results_processing.top_mean(np.asarray(acc_values), i)
+        acc_string += '{} - {:.2f}%\n'.format(i * p.eval_every, m)
+    return acc_string
+
+
 optimizer = tf.train.MomentumOptimizer(p.learning_rate, 0.93)
 train_step = optimizer.minimize(train_loss)
 
@@ -228,10 +242,9 @@ sess = tf.Session()
 init = tf.global_variables_initializer()
 sess.run(init)
 
-saved_train_loss = []
-saved_train_acc = []
-saved_eval_acc = []
-saved_test_acc = []
+saved_train_loss, saved_train_acc = ([], [])
+saved_eval_loss, saved_eval_acc = ([], [])
+saved_test_loss, saved_test_acc = ([], [])
 
 
 def get_h5_data(source, indices):
@@ -253,69 +266,106 @@ for i in range(p.generations):
     train_y = np.asarray(get_h5_labels(train_labels, r_idx))
     train_dict = {train_input: train_x, train_target: train_y, keep_prob: p.dropout_train}
     sess.run(train_step, feed_dict=train_dict)
-    temp_train_loss, temp_train_preds = sess.run([train_loss, train_preds], feed_dict=train_dict)
+    tmp_train_loss, tmp_train_preds = sess.run([train_loss, train_preds], feed_dict=train_dict)
     # ---------- print weights ----------
     if (i + 1) % p.print_weights_every == 0:
         print_weights(sess)
     # ---------- evaluate ----------
     if (i + 1) % p.eval_every == 0:
         # --- calculate accuracy for train set ---
-        train_cm = confusion_matrix(temp_train_preds, train_y, 'confusion matrix for train set', do_print=False)
-        temp_train_acc = get_accuracy(train_cm)
+        train_cm = confusion_matrix(tmp_train_preds, train_y, 'confusion matrix for train set', do_print=False)
+        tmp_train_acc = get_accuracy(train_cm)
         # --- calculate accuracy on validation set ---
         preds = np.zeros(eval_idx.size, np.float32)
         targets = np.zeros(eval_idx.size, np.float32)
+        t_eval_loss = np.zeros(eval_idx.size, np.float32)
         for l in range(0, eval_idx.size, p.eval_batch_size):
             eval_x = tuple(np.asarray(get_h5_data(j, (eval_idx[l],))) for j in train_data)
             eval_y = get_h5_labels(train_labels, (eval_idx[l],))
-            _preds = sess.run(eval_preds, feed_dict={eval_input: eval_x, eval_target: eval_y, keep_prob: p.dropout_eval})
+            eval_dict = {eval_input: eval_x, eval_target: eval_y, keep_prob: p.dropout_eval}
+            _loss, _preds = sess.run([eval_loss, eval_preds], feed_dict=eval_dict)
             targets[l * p.eval_batch_size:(l + 1) * p.eval_batch_size] = eval_y
             preds[l * p.eval_batch_size:(l + 1) * p.eval_batch_size] = _preds
+            t_eval_loss[l * p.eval_batch_size:(l + 1) * p.eval_batch_size] = _loss
+        tmp_eval_loss = np.mean(t_eval_loss)
         eval_cm = confusion_matrix(preds, targets, 'Confusion matrix for evaluation set', do_print=True)
-        temp_eval_acc = get_accuracy(eval_cm)
+        tmp_eval_acc = get_accuracy(eval_cm)
         # --- calculate accuracy on test set ---
         preds = np.zeros(test_data[0].shape[0], np.float32)
         targets = np.zeros(test_data[0].shape[0], np.float32)
+        t_test_loss = np.zeros(test_data[0].shape[0], np.float32)
         for l in range(0, test_data[0].shape[0], p.test_batch_size):
             test_x = tuple(np.asarray(get_h5_data(j, (l,))) for j in test_data)
             test_y = get_h5_labels(test_labels, (l,))
-            _preds = sess.run(test_preds, feed_dict={test_input: test_x, test_target: test_y, keep_prob: p.dropout_test})
+            test_dict = {test_input: test_x, test_target: test_y, keep_prob: p.dropout_test}
+            _loss, _preds = sess.run([test_loss, test_preds], feed_dict=test_dict)
             targets[l * p.test_batch_size:(l + 1) * p.test_batch_size] = test_y
             preds[l * p.test_batch_size:(l + 1) * p.test_batch_size] = _preds
+            t_test_loss[l * p.test_batch_size:(l + 1) * p.test_batch_size] = _loss
+        tmp_test_loss = np.mean(t_test_loss)
         test_cm = confusion_matrix(preds, targets, 'Confusion matrix for test set', do_print=True)
-        temp_test_acc = get_accuracy(test_cm)
+        tmp_test_acc = get_accuracy(test_cm)
         # --- record and print results ---
-        saved_train_loss.append(temp_train_loss)
-        saved_train_acc.append(temp_train_acc)
-        saved_eval_acc.append(temp_eval_acc)
-        saved_test_acc.append(temp_test_acc)
-        acc_and_loss = [(i + 1), temp_train_loss, temp_train_acc, temp_eval_acc, temp_test_acc]
+        saved_train_loss.append(tmp_train_loss)
+        saved_eval_loss.append(tmp_eval_loss)
+        saved_test_loss.append(tmp_test_loss)
+        saved_train_acc.append(tmp_train_acc)
+        saved_eval_acc.append(tmp_eval_acc)
+        saved_test_acc.append(tmp_test_acc)
+        acc_and_loss = [(i + 1), tmp_train_loss, tmp_eval_loss, tmp_test_loss, tmp_train_acc, tmp_eval_acc, tmp_test_acc]
         acc_and_loss = [np.round(x, 2) for x in acc_and_loss]
         log.get().info(
-            'Generation # {}. Train loss: {:.5f}. Train acc (Eval acc, Test acc): {:.2f} ({:.2f}, {:.2f})'.format(
-                *acc_and_loss)
+            'Generation #{}. Train-Eval-Test loss: {:.5f}, {:.5f}, {:.5f}. Train-Eval-Test acc: {:.2f}, {:.2f}, {:.2f}'
+                .format(*acc_and_loss)
         )
-
-eval_indices = range(0, p.generations, p.eval_every)
-# Plot loss over time
-plt.plot(eval_indices, saved_train_loss, 'k-')
-plt.title('Softmax loss per generation')
-plt.xlabel('Generation')
-plt.ylabel('Softmax Loss')
-# plt.show()
-plt.savefig('./plots/' + experiment_name + '_loss.png')
-# Plot train and eval accuracy
-plt.plot(eval_indices, saved_train_acc, 'k-', label='Train set accuracy')
-plt.plot(eval_indices, saved_eval_acc, 'g-', label='Validation set accuracy')
-plt.plot(eval_indices, saved_test_acc, 'r--', label='Test set accuracy')
-plt.title('Train, validation and test accuracy')
-plt.xlabel('Generation')
-plt.ylabel('Accuracy')
-plt.legend(loc='lower right')
-# plt.show()
-plt.savefig('./plots/' + experiment_name + '_accuracy.png')
 
 train_eval_h5.close()
 test_h5.close()
+
+# ========== Draw plots ==========
+eval_indices = range(0, p.generations, p.eval_every)
+# ----- Plot accuracy over time -----
+plt.plot(eval_indices, saved_train_acc, 'k-', label='Train acc')
+plt.plot(eval_indices, saved_eval_acc, 'g-', label='Eval acc')
+plt.plot(eval_indices, saved_test_acc, 'r--', label='Test acc')
+plt.title('Accuracy per generation')
+plt.xlabel('Generation')
+plt.ylabel('Accuracy')
+plt.legend(loc='lower right')
+plt.text(eval_indices[-1] / 5, 20, estimate_mean_accuracy(saved_test_acc, 'Test'))
+plt.xlim(0)
+plt.ylim(0, 100)
+# plt.show()
+plt.savefig('./plots/{}_accuracy.png'.format(experiment_name))
+# ----- Plot loss over time -----
+plt.clf()
+plt.plot(eval_indices, saved_train_loss, 'k-', label='Train loss')
+plt.plot(eval_indices, saved_eval_loss, 'g-', label='Eval loss')
+plt.plot(eval_indices, saved_test_loss, 'r--', label='Test Loss')
+plt.title('Softmax loss per generation')
+plt.xlabel('Generation')
+plt.ylabel('Softmax Loss')
+plt.legend(loc='lower right')
+plt.xlim(0)
+plt.ylim(0)
+# plt.show()
+plt.savefig('./plots/{}_loss.png'.format(experiment_name))
+
+# --- analyze saved accuracies ---
+for (acc, name) in ((saved_train_acc, 'Train'), (saved_eval_acc, 'Validation'), (saved_test_acc, 'Test')):
+    log.get().info(estimate_mean_accuracy(acc, name))
+
+# --- save the experiment results ---
+class ExperimentResults:
+    def __init__(self, accuracies, losses):
+        self.params = p
+        self.accuracies = accuracies
+        self.losses = losses
+
+experiment_results = ExperimentResults((saved_train_acc, saved_eval_acc, saved_test_acc),
+                                       (saved_train_loss, saved_eval_loss, saved_test_loss))
+
+with open('./logs/{}.pkl'.format(experiment_name), 'wb') as f:
+    pickle.dump(experiment_results, f)
 
 log.get().info("\nDONE!")
