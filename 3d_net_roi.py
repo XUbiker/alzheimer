@@ -21,8 +21,8 @@ class Params:
     def __init__(self):
         self.h5_train_path = cfg.h5_cache_dir + '/sets_10/alz_train_eval_e5_AD_NC.h5'
         self.h5_test_path = cfg.h5_cache_dir + '/sets_10/alz_test_ext_e5_AD_NC.h5'
-        # self.h5_series_path = ('data/smri_L', 'data/smri_R', 'data/md_L', 'data/md_R')
-        self.h5_series_path = ('data/smri_L', 'data/smri_R')
+        self.h5_series_path = ('data/smri_L', 'data/smri_R', 'data/md_L', 'data/md_R')
+        # self.h5_series_path = ('data/smri_L', 'data/smri_R')
         # self.h5_series_path = ('data/smri_LR', 'data/md_LR')
         self.n_series = len(self.h5_series_path)
         self.h5_labels_path = 'labels/labels_L'
@@ -33,7 +33,7 @@ class Params:
         self.momentum = 0.93
         self.target_size = 3
         self.num_channels = 1
-        self.generations = 100
+        self.generations = 1000
         self.eval_every = 10
         self.cv_reshuffle_every = 500
         self.print_weights_every = 500
@@ -56,10 +56,17 @@ log.get().info(':::Params:::\n' + str(p) + '\n')
 train_eval_h5 = h5py.File(p.h5_train_path, 'r')
 test_h5 = h5py.File(p.h5_test_path, 'r')
 
-train_data = tuple(train_eval_h5[path] for path in p.h5_series_path)
-test_data = tuple(test_h5[path] for path in p.h5_series_path)
-train_labels = train_eval_h5[p.h5_labels_path]
-test_labels = test_h5[p.h5_labels_path]
+data = {
+    'train': tuple(train_eval_h5[path] for path in p.h5_series_path),
+    'eval': tuple(train_eval_h5[path] for path in p.h5_series_path),
+    'test': tuple(test_h5[path] for path in p.h5_series_path)
+}
+
+labels = {
+    'train': train_eval_h5[p.h5_labels_path],
+    'eval': train_eval_h5[p.h5_labels_path],
+    'test': test_h5[p.h5_labels_path]
+}
 
 
 def cross_validation_reshuffle(train_eval_data, prc=0.9):
@@ -72,19 +79,18 @@ def cross_validation_reshuffle(train_eval_data, prc=0.9):
     return _train_idx, _eval_idx
 
 
-train_idx, eval_idx = cross_validation_reshuffle(train_data[0])
-
-img_shape = train_data[0][0].shape
+idx = {}
+idx['train'], idx['eval'] = cross_validation_reshuffle(data['train'][0])
+idx['test'] = np.arange(data['test'][0].shape[0])
 
 input_shape = {}
-input_var = {}
+input_data = {}
 target = {}
-
+img_shape = data['train'][0][0].shape
 for s in samples:
     input_shape[s] = [p.batch_size[s]] + list(img_shape) + [1]
-    input_var[s] = tuple(tf.placeholder(tf.float32, shape=input_shape[s]) for _ in range(p.n_series))
+    input_data[s] = tuple(tf.placeholder(tf.float32, shape=input_shape[s]) for _ in range(p.n_series))
     target[s] = tf.placeholder(tf.int32, shape=p.batch_size[s])
-
 keep_prob = tf.placeholder(tf.float32)
 
 
@@ -102,11 +108,11 @@ def calc_size_after_pooling(src_3d_shape, pool_list):
 # --- Create weight variables for convolution layers ---
 cv_w = list([] for _ in range(p.n_conv_layers))
 for i in range(p.n_series):
-    for l in range(p.n_conv_layers):
-        prev_f = 1 if l == 0 else p.conv_features[l - 1]
-        curr_f = p.conv_features[l]
-        conv_ker = p.conv_kernels[l]
-        cv_w[l].append(create_var('W' + str(l) + '_' + str(i), shape=[conv_ker, conv_ker, conv_ker, prev_f, curr_f]))
+    for k in range(p.n_conv_layers):
+        prev_f = 1 if k == 0 else p.conv_features[k - 1]
+        curr_f = p.conv_features[k]
+        conv_ker = p.conv_kernels[k]
+        cv_w[k].append(create_var('W' + str(k) + '_' + str(i), shape=[conv_ker, conv_ker, conv_ker, prev_f, curr_f]))
 
 # --- Create variable for fully-connected layers ---
 fc1_in_size = calc_size_after_pooling(input_shape['train'][1:4], p.pool_kernels) * p.conv_features[-1] * p.n_series
@@ -196,17 +202,17 @@ def fusion_network(input_series, batch_size, is_training):
 
 
 output = {}
-output['train'] = fusion_network(input_var['train'], p.batch_size['train'], is_training=True)
-output['eval'] = fusion_network(input_var['eval'], p.batch_size['eval'], is_training=False)
-output['test'] = fusion_network(input_var['test'], p.batch_size['test'], is_training=False)
+output['train'] = fusion_network(input_data['train'], p.batch_size['train'], is_training=True)
+output['eval'] = fusion_network(input_data['eval'], p.batch_size['eval'], is_training=False)
+output['test'] = fusion_network(input_data['test'], p.batch_size['test'], is_training=False)
 
 loss = {}
 logits = {}
-ypreds = {}
+preds = {}
 for s in samples:
     loss[s] = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=output[s], labels=target[s]))
     logits[s] = tf.nn.softmax(output[s])
-    ypreds[s] = tf.argmax(logits[s], axis=1)
+    preds[s] = tf.argmax(logits[s], axis=1)
 
 
 def get_confusion_matrix(predictions, expectations, comment='', do_print=True):
@@ -240,10 +246,10 @@ def get_p_value(predictions, expectations):
 
 
 def estimate_top_mean_and_variation(values, set_name, metric_name):
-    str = '{}, {} mean and variation (it|mean|var):\n'.format(set_name, metric_name)
+    str = '{} mean and variation (it|mean|var) on {} set:\n'.format(metric_name, set_name)
     for i in p.metric_mean_intervals:
         m = results_processing.top_mean_with_variance(np.asarray(values), i)
-        str += '{} - {:.2f}% - {:.3f}\n'.format(i * p.eval_every, m[0], m[1])
+        str += '{}: {:.2f} - {:.3f}\n'.format(i * p.eval_every, m[0], m[1])
     return str
 
 
@@ -272,103 +278,78 @@ for i in range(p.generations):
     # ---------- CV reshuffle if needed ----------
     if (i + 1) % p.cv_reshuffle_every == 0:
         log.get().info('Performing cross-validation reshuffling')
-        train_idx, eval_idx = cross_validation_reshuffle(train_data[0])
+        idx['train'], idx['eval'] = cross_validation_reshuffle(data['train'][0])
     # ---------- train ----------
-    r_idx = np.random.choice(train_idx, size=p.batch_size['train'])
-    train_x = tuple(np.asarray(get_h5_data(j, r_idx)) for j in train_data)
-    train_y = np.asarray(get_h5_labels(train_labels, r_idx))
-    d = {input_var['train']: train_x, target['train']: train_y, keep_prob: p.dropout['train']}
+    r_idx = np.random.choice(idx['train'], size=p.batch_size['train'])
+    train_x = tuple(np.asarray(get_h5_data(j, r_idx)) for j in data['train'])
+    train_y = np.asarray(get_h5_labels(labels['train'], r_idx))
+    d = {input_data['train']: train_x, target['train']: train_y, keep_prob: p.dropout['train']}
     sess.run(train_step, feed_dict=d)
-    tmp_train_loss, tmp_train_preds = sess.run([loss['train'], ypreds['train']], feed_dict=d)
+    train_loss, train_preds = sess.run([loss['train'], preds['train']], feed_dict=d)
     # ---------- print weights ----------
     if (i + 1) % p.print_weights_every == 0:
         print_weights(sess)
     # ---------- evaluate ----------
     if (i + 1) % p.eval_every == 0:
         # --- calculate accuracy for train set ---
-        train_cm = get_confusion_matrix(tmp_train_preds, train_y, 'confusion matrix for train set', do_print=False)
-        tmp_train_acc = get_accuracy(train_cm)
-        # --- calculate accuracy on validation set ---
-        preds = np.zeros(eval_idx.size, np.float32)
-        targets = np.zeros(eval_idx.size, np.float32)
-        t_eval_loss = np.zeros(eval_idx.size, np.float32)
-        for l in range(0, eval_idx.size, p.batch_size['eval']):
-            eval_x = tuple(np.asarray(get_h5_data(j, (eval_idx[l],))) for j in train_data)
-            eval_y = get_h5_labels(train_labels, (eval_idx[l],))
-            eval_dict = {input_var['eval']: eval_x, target['eval']: eval_y, keep_prob: p.dropout['eval']}
-            _loss, _preds = sess.run([loss['eval'], ypreds['eval']], feed_dict=eval_dict)
-            targets[l * p.batch_size['eval']:(l + 1) * p.batch_size['eval']] = eval_y
-            preds[l * p.batch_size['eval']:(l + 1) * p.batch_size['eval']] = _preds
-            t_eval_loss[l * p.batch_size['eval']:(l + 1) * p.batch_size['eval']] = _loss
-        tmp_eval_loss = np.mean(t_eval_loss)
-        eval_cm = get_confusion_matrix(preds, targets, 'Confusion matrix for evaluation set', do_print=True)
-        tmp_eval_acc = get_accuracy(eval_cm)
-        # --- calculate accuracy on test set ---
-        preds = np.zeros(test_data[0].shape[0], np.float32)
-        targets = np.zeros(test_data[0].shape[0], np.float32)
-        t_test_loss = np.zeros(test_data[0].shape[0], np.float32)
-        for l in range(0, test_data[0].shape[0], p.batch_size['test']):
-            test_x = tuple(np.asarray(get_h5_data(j, (l,))) for j in test_data)
-            test_y = get_h5_labels(test_labels, (l,))
-            test_dict = {input_var['test']: test_x, target['test']: test_y, keep_prob: p.dropout['test']}
-            _loss, _preds = sess.run([loss['test'], ypreds['test']], feed_dict=test_dict)
-            targets[l * p.batch_size['test']:(l + 1) * p.batch_size['test']] = test_y
-            preds[l * p.batch_size['test']:(l + 1) * p.batch_size['test']] = _preds
-            t_test_loss[l * p.batch_size['test']:(l + 1) * p.batch_size['test']] = _loss
-        tmp_test_loss = np.mean(t_test_loss)
-        test_cm = get_confusion_matrix(preds, targets, 'Confusion matrix for test set', do_print=True)
-        tmp_test_acc = get_accuracy(test_cm)
+        cm = get_confusion_matrix(train_preds, train_y, 'confusion matrix for train set', do_print=False)
+        saved_acc['train'].append(get_accuracy(cm))
+        saved_loss['train'].append(train_loss)
+        saved_pv['train'].append(get_p_value(train_preds, train_y))
+        # --- calculate accuracy on eval and test set ---
+        for s in ('eval', 'test'):
+            t_preds = np.zeros(idx[s].size, np.float32)
+            t_targets = np.zeros(idx[s].size, np.float32)
+            t_loss = np.zeros(idx[s].size, np.float32)
+            for k in range(0, idx[s].size, p.batch_size[s]):
+                _x = tuple(np.asarray(get_h5_data(j, (idx[s][k],))) for j in data[s])
+                _y = get_h5_labels(labels[s], (idx[s][k],))
+                d = {input_data[s]: _x, target[s]: _y, keep_prob: p.dropout[s]}
+                _loss, _preds = sess.run([loss[s], preds[s]], feed_dict=d)
+                t_targets[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _y
+                t_preds[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _preds
+                t_loss[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _loss
+            saved_loss[s].append(np.mean(t_loss))
+            cm = get_confusion_matrix(t_preds, t_targets, 'Confusion matrix for ' + s + ' set', do_print=True)
+            saved_acc[s].append(get_accuracy(cm))
+            saved_pv[s].append(get_p_value(t_preds, t_targets))
         # --- record and print results ---
-        saved_loss['train'].append(tmp_train_loss)
-        saved_loss['eval'].append(tmp_eval_loss)
-        saved_loss['test'].append(tmp_test_loss)
-        saved_acc['train'].append(tmp_train_acc)
-        saved_acc['eval'].append(tmp_eval_acc)
-        saved_acc['test'].append(tmp_test_acc)
-        acc_and_loss = [(i + 1), tmp_train_loss, tmp_eval_loss, tmp_test_loss, tmp_train_acc, tmp_eval_acc, tmp_test_acc]
-        acc_and_loss = [np.round(x, 2) for x in acc_and_loss]
-        log.get().info(
-            'Generation #{}. Train-Eval-Test loss: {:.5f}, {:.5f}, {:.5f}. Train-Eval-Test acc: {:.2f}, {:.2f}, {:.2f}'
-                .format(*acc_and_loss)
-        )
+        log.get().info('Generation #{}.'.format(i+1))
+        log.get().info('Train-Eval-Test loss: {:.5f}, {:.5f}, {:.5f}.'.format(saved_loss['train'][-1], saved_loss['eval'][-1], saved_loss['test'][-1]))
+        log.get().info('Train-Eval-Test accuracy: {:.2f}, {:.2f}, {:.2f}.'.format(saved_acc['train'][-1], saved_acc['eval'][-1], saved_acc['test'][-1]))
+        log.get().info('Train-Eval-Test p-value: {:.3f}, {:.3f}, {:.3f}.\n'.format(saved_pv['train'][-1], saved_pv['eval'][-1], saved_pv['test'][-1]))
 
 train_eval_h5.close()
 test_h5.close()
 
+def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), metric_name='', exp_name=experiment_name, y_lim=0):
+    plt.clf()
+    plt.plot(eval_indices, data_dict['train'], 'k-', label='train')
+    plt.plot(eval_indices, data_dict['eval'], 'g-', label='eval')
+    plt.plot(eval_indices, data_dict['test'], 'r--', label='test')
+    plt.title(metric_name + ' per generation')
+    plt.xlabel('generation')
+    plt.ylabel(metric_name)
+    plt.legend(loc='lower right')
+    plt.text(eval_indices[-1] / 5, 20, estimate_top_mean_and_variation(data_dict['test'], 'test', metric_name))
+    plt.xlim(0)
+    if y_lim > 0:
+        plt.ylim(0, y_lim)
+    else:
+        plt.ylim(0)
+    # plt.show()
+    plt.savefig('./plots/{}_{}.png'.format(exp_name, metric_name))
+
+
 # ========== Draw plots ==========
-eval_indices = range(0, p.generations, p.eval_every)
-# ----- Plot accuracy over time -----
-plt.plot(eval_indices, saved_acc['train'], 'k-', label='Train acc')
-plt.plot(eval_indices, saved_acc['eval'], 'g-', label='Eval acc')
-plt.plot(eval_indices, saved_acc['test'], 'r--', label='Test acc')
-plt.title('Accuracy per generation')
-plt.xlabel('Generation')
-plt.ylabel('Accuracy')
-plt.legend(loc='lower right')
-plt.text(eval_indices[-1] / 5, 20, estimate_top_mean_and_variation(saved_acc['test'], 'Test', 'accuracy'))
-plt.xlim(0)
-plt.ylim(0, 100)
-# plt.show()
-plt.savefig('./plots/{}_accuracy.png'.format(experiment_name))
-# ----- Plot loss over time -----
-plt.clf()
-plt.plot(eval_indices, saved_loss['train'], 'k-', label='Train loss')
-plt.plot(eval_indices, saved_loss['eval'], 'g-', label='Eval loss')
-plt.plot(eval_indices, saved_loss['test'], 'r--', label='Test Loss')
-plt.title('Softmax loss per generation')
-plt.xlabel('Generation')
-plt.ylabel('Softmax Loss')
-plt.legend(loc='lower right')
-plt.xlim(0)
-plt.ylim(0)
-# plt.show()
-plt.savefig('./plots/{}_loss.png'.format(experiment_name))
+draw_plot(saved_acc, metric_name='accuracy', y_lim=100)
+draw_plot(saved_loss, metric_name='loss')
+draw_plot(saved_pv, metric_name='p-value')
 
 # --- analyze saved accuracies and p-values ---
-for sample_name in saved_acc:
-    log.get().info(estimate_top_mean_and_variation(saved_acc[sample_name], sample_name.title(), 'accuracy'))
-for sample_name in saved_pv:
-    log.get().info(estimate_top_mean_and_variation(saved_pv[sample_name], sample_name.title(), 'p-value'))
+for s in samples:
+    log.get().info(estimate_top_mean_and_variation(saved_acc[s], s.title(), 'accuracy'))
+    log.get().info(estimate_top_mean_and_variation(saved_pv[s], s.title(), 'p-value'))
 
 # --- save the experiment results ---
 class ExperimentResults:
@@ -378,9 +359,11 @@ class ExperimentResults:
         self.losses = losses
         self.p_values = p_values
 
-experiment_results = ExperimentResults(list(saved_acc[_] for _ in ('train', 'eval', 'test')),
-                                       list(saved_loss[_] for _ in ('train', 'eval', 'test')),
-                                       list(saved_pv[_] for _ in ('train', 'eval', 'test')))
+experiment_results = ExperimentResults(
+    list(saved_acc[s] for s in samples),
+    list(saved_loss[s] for s in samples),
+    list(saved_pv[s] for s in samples)
+)
 
 with open('./logs/{}.pkl'.format(experiment_name), 'wb') as f:
     pickle.dump(experiment_results, f)
