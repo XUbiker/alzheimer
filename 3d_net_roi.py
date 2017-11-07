@@ -231,7 +231,7 @@ def get_confusion_matrix(predictions, expectations, comment='', do_print=True):
 
 
 def get_accuracy(confusion_matrix):
-    return 100.0 * np.trace(confusion_matrix) / np.sum(confusion_matrix)
+    return np.trace(confusion_matrix) / np.sum(confusion_matrix)
 
 
 def get_p_value(predictions, expectations):
@@ -252,15 +252,18 @@ def estimate_top_mean_and_variation(values, set_name, metric_name):
         str += '{}: {:.2f} - {:.3f}\n'.format(i * p.eval_every, m[0], m[1])
     return str
 
+# ---------- define optimization process ----------
+global_step = tf.Variable(0, trainable=False)
+learning_rate = tf.train.exponential_decay(p.start_learning_rate, global_step, p.decay_iterations, p.decay_rate, staircase=True)
+optimizer = tf.train.MomentumOptimizer(learning_rate, p.momentum, use_nesterov=True)
+train_step = optimizer.minimize(loss['train'], global_step=global_step)
 
-optimizer = tf.train.MomentumOptimizer(p.start_learning_rate, 0.93)
-train_step = optimizer.minimize(loss['train'])
-
-# Initialize Variables
+# ------- Initialize Variables ----------
 sess = tf.Session()
 init = tf.global_variables_initializer()
 sess.run(init)
 
+# ---------- variables to save the metrics during optimization ----------
 saved_acc = {'train': [], 'eval': [], 'test': []}
 saved_loss = {'train': [], 'eval': [], 'test': []}
 saved_pv = {'train': [], 'eval': [], 'test': []}
@@ -274,6 +277,7 @@ def get_h5_labels(source, indices):
     return list(map(lambda idx: source[idx], indices))
 
 
+# ---------- main optimization loop ----------
 for i in range(p.generations):
     # ---------- CV reshuffle if needed ----------
     if (i + 1) % p.cv_reshuffle_every == 0:
@@ -342,16 +346,16 @@ def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), met
 
 
 # ========== Draw plots ==========
-draw_plot(saved_acc, metric_name='accuracy', y_lim=100)
+draw_plot(saved_acc, metric_name='accuracy', y_lim=1)
 draw_plot(saved_loss, metric_name='loss')
 draw_plot(saved_pv, metric_name='p-value')
 
-# --- analyze saved accuracies and p-values ---
+# ---------- analyze saved accuracies and p-values ----------
 for s in samples:
     log.get().info(estimate_top_mean_and_variation(saved_acc[s], s.title(), 'accuracy'))
     log.get().info(estimate_top_mean_and_variation(saved_pv[s], s.title(), 'p-value'))
 
-# --- save the experiment results ---
+# ---------- save the experiment results ----------
 class ExperimentResults:
     def __init__(self, accuracies, losses, p_values):
         self.params = p
