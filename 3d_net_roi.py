@@ -10,32 +10,40 @@ import os
 from logger import XLogger
 
 logs = sorted(l if '.' not in l else os.path.split(l)[0] for l in os.listdir("./logs/"))
-log_id = 0 if not logs else int(logs[-1])+1
+log_id = 0 if not logs else int(logs[-1]) + 1
 experiment_name = str(log_id).zfill(4)
 log = XLogger('./logs/' + experiment_name, full_format=False)
 
+samples = ('train', 'eval', 'test_0', 'test_1', 'test_2')
+samples_eval = ('eval', 'test_0', 'test_1', 'test_2')
+samples_test = ('test_0', 'test_1', 'test_2')
 
-samples = ('train', 'eval', 'test', 'test_ext')
+cfg_str = 'AD_NC'
+
 
 class Params:
     def __init__(self):
         self.main_class_idx = cfg.get_label_code('ternary', 'AD')
-        self.h5_train_path = cfg.h5_cache_dir + '/sets_10/alz_train_eval_e5_AD_NC.h5'
-        self.h5_test_path = cfg.h5_cache_dir + '/sets_10/alz_test_e5_AD_NC.h5'
-        self.h5_test_ext_path = cfg.h5_cache_dir + '/sets_10/alz_test_ext_e5_AD_NC.h5'
-        self.h5_series_path = ('data/smri_L', 'data/smri_R', 'data/md_L', 'data/md_R')
-        # self.h5_series_path = ('data/smri_L', 'data/smri_R')
+        self.h5_data_path = {
+            'train': cfg.h5_cache_dir + '/sets_10/alz_train_eval_e5_' + cfg_str + '.h5',
+            'eval': cfg.h5_cache_dir + '/sets_10/alz_train_eval_e5_' + cfg_str + '.h5',
+            'test_0': cfg.h5_cache_dir + '/sets_10/alz_test_e5_' + cfg_str + '.h5',
+            'test_1': cfg.h5_cache_dir + '/sets_10/alz_test_ext_e5_' + cfg_str + '.h5',
+            'test_2': cfg.h5_cache_dir + '/sets_10/alz_test_ext_e5_' + cfg_str + '.h5'
+        }
+        # self.h5_series_path = ('data/smri_L', 'data/smri_R', 'data/md_L', 'data/md_R')
+        self.h5_series_path = ('data/smri_L', 'data/smri_R')
         # self.h5_series_path = ('data/smri_LR', 'data/md_LR')
         self.n_series = len(self.h5_series_path)
         self.h5_labels_path = 'labels/labels_L'
-        self.batch_size = {'train': 17, 'eval': 1, 'test': 1, 'test_ext': 1}
+        self.batch_size = {'train': 17, 'eval': 1, 'test_0': 1, 'test_1': 1, 'test_2': 1}
         self.start_learning_rate = 0.01
         self.decay_iterations = 100
         self.decay_rate = 0.8
         self.momentum = 0.93
         self.target_size = 3
         self.num_channels = 1
-        self.generations = 100
+        self.generations = 50
         self.eval_every = 10
         self.cv_reshuffle_every = 500
         self.print_weights_every = 500
@@ -45,8 +53,9 @@ class Params:
         self.n_conv_layers = len(self.conv_kernels)
         self.fc_features = (16,)
         self.n_fc_layers = len(self.fc_features)
-        self.dropout = {'train': 0.5, 'eval': 1.0, 'test': 1.0, 'test_ext': 1.0}
+        self.dropout = {'train': 0.5, 'eval': 1.0, 'test_0': 1.0, 'test_1': 1.0, 'test_2': 1.0}
         self.metric_mean_intervals = (1, 5, 10, 20)
+        self.plot_type = {'train': 'k--', 'eval': 'g--', 'test_0': 'r-', 'test_1': 'b-', 'test_2': 'y-'}
 
     def __str__(self):
         return '\n'.join("%s: %s" % item for item in sorted(vars(self).items()))
@@ -55,39 +64,25 @@ class Params:
 p = Params()
 log.get().info(':::Params:::\n' + str(p) + '\n')
 
-train_eval_h5 = h5py.File(p.h5_train_path, 'r')
-test_h5 = h5py.File(p.h5_test_path, 'r')
-test_ext_h5 = h5py.File(p.h5_test_ext_path, 'r')
-
-data = {
-    'train': tuple(train_eval_h5[path] for path in p.h5_series_path),
-    'eval': tuple(train_eval_h5[path] for path in p.h5_series_path),
-    'test': tuple(test_h5[path] for path in p.h5_series_path),
-    'test_ext': tuple(test_ext_h5[path] for path in p.h5_series_path)
-}
-
-labels = {
-    'train': train_eval_h5[p.h5_labels_path],
-    'eval': train_eval_h5[p.h5_labels_path],
-    'test': test_h5[p.h5_labels_path],
-    'test_ext': test_ext_h5[p.h5_labels_path]
-}
+h5 = {s: h5py.File(p.h5_data_path[s], 'r') for s in samples}
+data = {s: tuple(h5[s][path] for path in p.h5_series_path) for s in samples}
+labels = {s: h5[s][p.h5_labels_path] for s in samples}
 
 
 def cross_validation_reshuffle(train_eval_data, prc=0.9):
     n = train_eval_data.shape[0]
-    idx = np.asarray(range(n))
-    np.random.shuffle(idx)
+    _idx = np.asarray(range(n))
+    np.random.shuffle(_idx)
     m = int(n * prc)
-    _train_idx = idx[:m]
-    _eval_idx = idx[m:]
+    _train_idx = _idx[:m]
+    _eval_idx = _idx[m:]
     return _train_idx, _eval_idx
 
 
 idx = {}
 idx['train'], idx['eval'] = cross_validation_reshuffle(data['train'][0])
-idx['test'] = np.arange(data['test'][0].shape[0])
-idx['test_ext'] = np.arange(data['test_ext'][0].shape[0])
+for s in samples_test:
+    idx[s] = np.arange(data[s][0].shape[0])
 
 input_shape = {}
 input_data = {}
@@ -124,7 +119,7 @@ for i in range(p.n_series):
 fc1_in_size = calc_size_after_pooling(input_shape['train'][1:4], p.pool_kernels) * p.conv_features[-1] * p.n_series
 fc_w = []
 for i in range(p.n_fc_layers):
-    prev_fc = fc1_in_size if i == 0 else p.fc_features[i-1]
+    prev_fc = fc1_in_size if i == 0 else p.fc_features[i - 1]
     curr_fc = p.fc_features[i]
     fc_w.append(create_var('fW' + str(i), shape=[prev_fc, curr_fc]))
 fc_w.append(create_var('fW' + str(p.n_fc_layers), shape=[p.fc_features[-1], p.target_size]))
@@ -133,12 +128,12 @@ fc_b = create_var('fb' + str(p.n_fc_layers), shape=[p.target_size])
 
 def print_weights(session):
     msg = 'weights values:\n'
-    for i in range(p.n_series):
+    for ii in range(p.n_series):
         for j in range(p.n_conv_layers):
-            v = session.run(cv_w[j][i])
+            v = session.run(cv_w[j][ii])
             msg += '\t mean: %f, std: %f\n'.format(np.asscalar(np.mean(v)), np.asscalar(np.std(v)))
-    for i in range(p.n_fc_layers):
-        v = session.run(fc_w[i])
+    for ii in range(p.n_fc_layers):
+        v = session.run(fc_w[ii])
         msg += '\t mean: %f, std: %f\n'.format(np.asscalar(np.mean(v)), np.asscalar(np.std(v)))
     log.get().info(msg)
 
@@ -193,12 +188,12 @@ def conv_network(data, index, pool_sizes, batch_size, is_training):
 
 def fusion_network(input_series, batch_size, is_training):
     conv_outputs = [tf.reshape(conv_network(data, idx, p.pool_kernels, batch_size, is_training), [batch_size, -1])
-                       for idx, data in enumerate(input_series)]
+                    for idx, data in enumerate(input_series)]
     fusion_flat = tf.concat(conv_outputs, 1)
     layer_value = fusion_flat
-    for i in range(p.n_fc_layers):
-        fc = tf.matmul(layer_value, fc_w[i])
-        bn = batch_normalization('fc_bn' + str(i), fc, is_training=is_training, decay=0.9)
+    for ii in range(p.n_fc_layers):
+        fc = tf.matmul(layer_value, fc_w[ii])
+        bn = batch_normalization('fc_bn' + str(ii), fc, is_training=is_training, decay=0.9)
         relu = tf.nn.relu(bn)
         fc_dropout = tf.nn.dropout(relu, keep_prob)
         layer_value = fc_dropout
@@ -207,11 +202,7 @@ def fusion_network(input_series, batch_size, is_training):
     return final_output
 
 
-output = {}
-output['train'] = fusion_network(input_data['train'], p.batch_size['train'], is_training=True)
-output['eval'] = fusion_network(input_data['eval'], p.batch_size['eval'], is_training=False)
-output['test'] = fusion_network(input_data['test'], p.batch_size['test'], is_training=False)
-output['test_ext'] = fusion_network(input_data['test_ext'], p.batch_size['test_ext'], is_training=False)
+output = {s: fusion_network(input_data[s], p.batch_size[s], is_training=(s == 'train')) for s in samples}
 
 loss = {}
 logits = {}
@@ -243,17 +234,21 @@ def get_accuracy(confusion_matrix):
 
 def get_bin_metric(confusion_matrix, class_index, metric):
     (tp, tn, fp, fn) = (0.0, 0.0, 0.0, 0.0)
-    for i in range(confusion_matrix.shape[0]):  # predicted
-        for j in range(confusion_matrix.shape[1]):  # expected
-            if (i == class_index) and (j == class_index): tp += confusion_matrix[i][j]
-            elif (i == class_index) and (j != class_index): fp += confusion_matrix[i][j]
-            elif (i != class_index) and (j == class_index): fn += confusion_matrix[i][j]
-            else: tn += confusion_matrix[i][j]
+    for ii in range(confusion_matrix.shape[0]):  # predicted
+        for jj in range(confusion_matrix.shape[1]):  # expected
+            if (ii == class_index) and (jj == class_index):
+                tp += confusion_matrix[ii][jj]
+            elif (ii == class_index) and (jj != class_index):
+                fp += confusion_matrix[ii][jj]
+            elif (ii != class_index) and (jj == class_index):
+                fn += confusion_matrix[ii][jj]
+            else:
+                tn += confusion_matrix[ii][jj]
     return {
         'ACC': (tp + tn) / (tp + fp + fn + tn),
-        'TPR':  tp / (tp + fn),
-        'TNR':  tn / (tn + fp),
-        'BAC':  0.5 * (tp / (tp + fn) + tn / (tn + fp))
+        'TPR': tp / (tp + fn),
+        'TNR': tn / (tn + fp),
+        'BAC': 0.5 * (tp / (tp + fn) + tn / (tn + fp))
     }[metric]
 
 
@@ -269,15 +264,17 @@ def get_p_value(predictions, expectations):
 
 
 def estimate_top_mean_and_variation(values, set_name, metric_name):
-    str = '{} mean and variation (it|mean|var) on {} set:\n'.format(metric_name, set_name)
+    str = '{} (it|mean|var)\non {}:\n'.format(metric_name, set_name)
     for i in p.metric_mean_intervals:
         m = results_processing.top_mean_with_variance(np.asarray(values), i)
         str += '{}: {:.2f} - {:.3f}\n'.format(i * p.eval_every, m[0], m[1])
     return str
 
+
 # ---------- define optimization process ----------
 global_step = tf.Variable(0, trainable=False)
-learning_rate = tf.train.exponential_decay(p.start_learning_rate, global_step, p.decay_iterations, p.decay_rate, staircase=True)
+learning_rate = tf.train.exponential_decay(p.start_learning_rate, global_step, p.decay_iterations, p.decay_rate,
+                                           staircase=True)
 optimizer = tf.train.MomentumOptimizer(learning_rate, p.momentum, use_nesterov=True)
 train_step = optimizer.minimize(loss['train'], global_step=global_step)
 
@@ -287,14 +284,10 @@ init = tf.global_variables_initializer()
 sess.run(init)
 
 # ---------- variables to save the metrics during optimization ----------
-saved_m = {
-    'acc': {'train': [], 'eval': [], 'test': [], 'test_ext': []},
-    'tpr': {'train': [], 'eval': [], 'test': [], 'test_ext': []},
-    'tnr': {'train': [], 'eval': [], 'test': [], 'test_ext': []},
-    'bac': {'train': [], 'eval': [], 'test': [], 'test_ext': []},
-    'loss': {'train': [], 'eval': [], 'test': [], 'test_ext': []},
-    'pv': {'train': [], 'eval': [], 'test': [], 'test_ext': []}
-}
+cm_metrics = ['ACC', 'TPR', 'TNR', 'BAC']
+metrics = cm_metrics + ['pv', 'loss']
+saved_m = {m: {s: [] for s in samples} for m in metrics}
+
 
 def get_h5_data(source, indices):
     return list(map(lambda idx: np.expand_dims(source[idx], 3), indices))
@@ -324,14 +317,12 @@ for i in range(p.generations):
     if (i + 1) % p.eval_every == 0:
         # --- calculate accuracy for train set ---
         cm = get_confusion_matrix(train_preds, train_y, 'confusion matrix for train set', do_print=False)
-        saved_m['acc']['train'].append(get_bin_metric(cm, p.main_class_idx, 'ACC'))
-        saved_m['tpr']['train'].append(get_bin_metric(cm, p.main_class_idx, 'TPR'))
-        saved_m['tnr']['train'].append(get_bin_metric(cm, p.main_class_idx, 'TNR'))
-        saved_m['bac']['train'].append(get_bin_metric(cm, p.main_class_idx, 'BAC'))
+        for m in cm_metrics:
+            saved_m[m]['train'].append(get_bin_metric(cm, p.main_class_idx, m))
         saved_m['loss']['train'].append(train_loss)
         saved_m['pv']['train'].append(get_p_value(train_preds, train_y))
         # --- calculate accuracy on eval and test set ---
-        for s in ('eval', 'test', 'test_ext'):
+        for s in samples_eval:
             t_preds = np.zeros(idx[s].size, np.float32)
             t_targets = np.zeros(idx[s].size, np.float32)
             t_loss = np.zeros(idx[s].size, np.float32)
@@ -343,71 +334,64 @@ for i in range(p.generations):
                 t_targets[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _y
                 t_preds[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _preds
                 t_loss[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _loss
-            saved_m['loss'][s].append(np.mean(t_loss))
             cm = get_confusion_matrix(t_preds, t_targets, 'Confusion matrix for ' + s + ' set', do_print=True)
-            saved_m['acc'][s].append(get_bin_metric(cm, p.main_class_idx, 'ACC'))
-            saved_m['tpr'][s].append(get_bin_metric(cm, p.main_class_idx, 'TPR'))
-            saved_m['tnr'][s].append(get_bin_metric(cm, p.main_class_idx, 'TNR'))
-            saved_m['bac'][s].append(get_bin_metric(cm, p.main_class_idx, 'BAC'))
+            for m in cm_metrics:
+                saved_m[m][s].append(get_bin_metric(cm, p.main_class_idx, m))
+            saved_m['loss'][s].append(np.mean(t_loss))
             saved_m['pv'][s].append(get_p_value(t_preds, t_targets))
         # --- record and print results ---
-        log.get().info('Generation #{}.'.format(i+1))
+        log.get().info('Generation #{}.'.format(i + 1))
         log.get().info(''.ljust(8) + '\t' + '\t'.join(s.ljust(8) for s in samples))
-        for metric in ('loss', 'acc', 'tpr', 'tnr', 'bac', 'pv'):
-            str_repr = '\t\t'.join('{:2.5f}'.format(saved_m[metric][s][-1]) for s in samples)
-            log.get().info(metric.ljust(8) + '\t' + str_repr)
+        for m in metrics:
+            str_repr = '\t\t'.join('{:2.5f}'.format(saved_m[m][s][-1]) for s in samples)
+            log.get().info(m.ljust(8) + '\t' + str_repr)
         log.get().info('\n')
 
-train_eval_h5.close()
-test_h5.close()
-test_ext_h5.close()
+for s in samples:
+    h5[s].close()
 
-def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), metric_name='', exp_name=experiment_name, y_lim=0):
+
+def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), metric_name='', exp_name=experiment_name,
+              y_lim=0):
     plt.clf()
-    plt.plot(eval_indices, data_dict['train'], 'k-', label='train')
-    plt.plot(eval_indices, data_dict['eval'], 'g-', label='eval')
-    plt.plot(eval_indices, data_dict['test'], 'r--', label='test')
-    plt.plot(eval_indices, data_dict['test_ext'], 'b--', label='test_ext')
+    for s in samples:
+        plt.plot(eval_indices, data_dict[s], p.plot_type[s], label=s)
     plt.title(metric_name + ' per generation')
     plt.xlabel('generation')
     plt.ylabel(metric_name)
     plt.legend(loc='lower right')
-    plt.text(eval_indices[-1] / 5, 20, estimate_top_mean_and_variation(data_dict['test'], 'test', metric_name))
-    plt.text(3 * eval_indices[-1] / 5, 20, estimate_top_mean_and_variation(data_dict['test_ext'], 'test_ext', metric_name))
+    text_step = int(eval_indices[-1] * 0.75 / len(samples_test))
+    text_pos = int(eval_indices[-1] * 0.05)
+    for s in samples_test:
+        plt.text(text_pos, 0.05, estimate_top_mean_and_variation(data_dict[s], s, metric_name), fontsize=7)
+        text_pos += text_step
     plt.xlim(0)
     if y_lim > 0:
         plt.ylim(0, y_lim)
     else:
         plt.ylim(0)
     # plt.show()
-    plt.savefig('./plots/{}_{}.png'.format(exp_name, metric_name))
+    plt.savefig('./plots/{}_{}.png'.format(exp_name, metric_name), dpi=300)
 
 
 # ========== Draw plots ==========
-draw_plot(saved_m['acc'], metric_name='accuracy', y_lim=1)
-draw_plot(saved_m['tpr'], metric_name='tpr', y_lim=1)
-draw_plot(saved_m['tnr'], metric_name='tnr', y_lim=1)
-draw_plot(saved_m['loss'], metric_name='loss')
-draw_plot(saved_m['pv'], metric_name='p-value')
+for m in metrics:
+    draw_plot(saved_m[m], metric_name=m, y_lim=m in cm_metrics)
 
 # ---------- analyze saved accuracies and p-values ----------
 for s in samples:
-    log.get().info(estimate_top_mean_and_variation(saved_m['acc'][s], s.title(), 'accuracy'))
+    log.get().info(estimate_top_mean_and_variation(saved_m['ACC'][s], s.title(), 'accuracy'))
     log.get().info(estimate_top_mean_and_variation(saved_m['pv'][s], s.title(), 'p-value'))
+
 
 # ---------- save the experiment results ----------
 class ExperimentResults:
-    def __init__(self, accuracies, losses, p_values):
+    def __init__(self, metrics_dict):
         self.params = p
-        self.accuracies = accuracies
-        self.losses = losses
-        self.p_values = p_values
+        self.metrics_dict = metrics_dict
 
-experiment_results = ExperimentResults(
-    list(saved_m['acc'][s] for s in samples),
-    list(saved_m['loss'][s] for s in samples),
-    list(saved_m['pv'][s] for s in samples)
-)
+
+experiment_results = ExperimentResults({(s, m): saved_m[m][s] for m in metrics for s in samples})
 
 with open('./logs/{}.pkl'.format(experiment_name), 'wb') as f:
     pickle.dump(experiment_results, f)
