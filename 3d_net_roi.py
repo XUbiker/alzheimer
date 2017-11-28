@@ -8,6 +8,7 @@ import results_processing
 import pickle
 import os
 from logger import XLogger
+from tabulate import tabulate
 
 logs = sorted(l if '.' not in l else os.path.split(l)[0] for l in os.listdir("./logs/"))
 log_id = 0 if not logs else int(logs[-1]) + 1
@@ -15,7 +16,7 @@ experiment_name = str(log_id).zfill(4)
 log = XLogger('./logs/' + experiment_name, full_format=False)
 
 samples = ('train', 'eval', 'test_0', 'test_1', 'test_2')
-sample_to_h5_series = {'train': 'train', 'eval': 'train', 'test_0': 'test_0', 'test_1': 'test_1', 'test_2': 'test2'}
+sample_to_h5_series = {'train': 'train', 'eval': 'train', 'test_0': 'test_0', 'test_1': 'test_1', 'test_2': 'test_2'}
 samples_eval = ('eval', 'test_0', 'test_1', 'test_2')
 samples_test = ('test_0', 'test_1', 'test_2')
 
@@ -33,18 +34,19 @@ class Params:
             'test_2': sets_dir + 'alz_test_2_e5_' + cfg_str + '.h5'
         }
         # self.h5_series_path = ('data/smri_L', 'data/smri_R', 'data/md_L', 'data/md_R')
-        self.h5_series_path = ('data/smri_L', 'data/smri_R')
+        # self.h5_series_path = ('data/smri_L', 'data/smri_R')
+        self.h5_series_path = ('data/smri_L',)
         # self.h5_series_path = ('data/smri_LR', 'data/md_LR')
         self.n_series = len(self.h5_series_path)
         self.h5_labels_path = 'labels/labels_L'
-        self.batch_size = {'train': 17, 'eval': 1, 'test_0': 1, 'test_1': 1, 'test_2': 1}
+        self.batch_size = {'train': 1, 'eval': 1, 'test_0': 1, 'test_1': 1, 'test_2': 1}
         self.start_learning_rate = 0.01
         self.decay_iterations = 100
         self.decay_rate = 0.8
         self.momentum = 0.93
         self.target_size = 3
         self.num_channels = 1
-        self.generations = 50
+        self.generations = 100
         self.eval_every = 10
         self.cv_reshuffle_every = 500
         self.print_weights_every = 500
@@ -57,6 +59,7 @@ class Params:
         self.dropout = {'train': 0.5, 'eval': 1.0, 'test_0': 1.0, 'test_1': 1.0, 'test_2': 1.0}
         self.metric_mean_intervals = (1, 5, 10, 20)
         self.plot_type = {'train': 'k--', 'eval': 'g--', 'test_0': 'r-', 'test_1': 'b-', 'test_2': 'y-'}
+        self.acc_mult_factor = 100
 
     def __str__(self):
         return '\n'.join("%s: %s" % item for item in sorted(vars(self).items()))
@@ -131,11 +134,11 @@ def print_weights(session):
     msg = 'weights values:\n'
     for ii in range(p.n_series):
         for j in range(p.n_conv_layers):
-            v = session.run(cv_w[j][ii])
-            msg += '\t mean: %f, std: %f\n'.format(np.asscalar(np.mean(v)), np.asscalar(np.std(v)))
+            vv = session.run(cv_w[j][ii])
+            msg += '\t mean: %f, std: %f\n'.format(np.asscalar(np.mean(vv)), np.asscalar(np.std(vv)))
     for ii in range(p.n_fc_layers):
-        v = session.run(fc_w[ii])
-        msg += '\t mean: %f, std: %f\n'.format(np.asscalar(np.mean(v)), np.asscalar(np.std(v)))
+        vv = session.run(fc_w[ii])
+        msg += '\t mean: %f, std: %f\n'.format(np.asscalar(np.mean(vv)), np.asscalar(np.std(vv)))
     log.get().info(msg)
 
 
@@ -172,11 +175,11 @@ def batch_normalization(name, inputs, is_training, decay=0.9):
         return tf.nn.batch_normalization(inputs, mean, var, beta, scale, epsilon)
 
 
-def conv_network(data, index, pool_sizes, batch_size, is_training):
+def conv_network(in_data, index, pool_sizes, is_training):
     conv_strides = [1, 1, 1, 1, 1]
     conv_padding = 'SAME'
     conv_decay = 0.9
-    layer_value = data
+    layer_value = in_data
     for layer in range(p.n_conv_layers):
         p_s = pool_sizes[layer]
         conv = tf.nn.conv3d(layer_value, cv_w[layer][index], strides=conv_strides, padding=conv_padding)
@@ -188,8 +191,8 @@ def conv_network(data, index, pool_sizes, batch_size, is_training):
 
 
 def fusion_network(input_series, batch_size, is_training):
-    conv_outputs = [tf.reshape(conv_network(data, idx, p.pool_kernels, batch_size, is_training), [batch_size, -1])
-                    for idx, data in enumerate(input_series)]
+    conv_outputs = [tf.reshape(conv_network(in_data, index, p.pool_kernels, is_training), [batch_size, -1])
+                    for index, in_data in enumerate(input_series)]
     fusion_flat = tf.concat(conv_outputs, 1)
     layer_value = fusion_flat
     for ii in range(p.n_fc_layers):
@@ -246,11 +249,21 @@ def get_bin_metric(confusion_matrix, class_index, metric):
             else:
                 tn += confusion_matrix[ii][jj]
     return {
-        'ACC': (tp + tn) / (tp + fp + fn + tn),
-        'TPR': tp / (tp + fn),
-        'TNR': tn / (tn + fp),
-        'BAC': 0.5 * (tp / (tp + fn) + tn / (tn + fp))
+        'ACC': (tp + tn) / (tp + fp + fn + tn) if tp + fp + fn + tn > 0 else 0.0,
+        'TPR': tp / (tp + fn) if tp + fn > 0 else 0.0,
+        'TNR': tn / (tn + fp) if tn + fp > 0 else 0.0,
+        'BAC': 0.5 * (tp / (tp + fn) + tn / (tn + fp)) if (tp + fn)*(tn + fp) > 0 else 0.0
     }[metric]
+
+
+def get_metric_ci(value, number_of_subjects, confidence=0.95):
+    assert confidence == 0.95, 'unsupported confidence value'
+    assert (value >= 0) and (value <= 1), 'unsupported accuracy range'
+    left = value - 1.96 * math.sqrt(value * (1 - value) / number_of_subjects)
+    right = value + 1.96 * math.sqrt(value * (1 - value) / number_of_subjects)
+    left = max(left, 0.0)
+    right = min(right, 1.0)
+    return left, right
 
 
 def get_p_value(predictions, expectations):
@@ -264,12 +277,12 @@ def get_p_value(predictions, expectations):
     return results_processing.p_value(_predictions, _expectations)
 
 
-def estimate_top_mean_and_variation(values, set_name, metric_name):
-    str = '{} (it|mean|var)\non {}:\n'.format(metric_name, set_name)
-    for i in p.metric_mean_intervals:
-        m = results_processing.top_mean_with_variance(np.asarray(values), i)
-        str += '{}: {:.2f} - {:.3f}\n'.format(i * p.eval_every, m[0], m[1])
-    return str
+def estimate_top_mean_and_var(values, set_name, metric_name, mult_factor):
+    ss = '{} (it|mean|var)\non {}:\n'.format(metric_name, set_name)
+    for interval in p.metric_mean_intervals:
+        m = results_processing.top_mean_with_variance(np.asarray(values), interval, mult_factor)
+        ss += '{}: {:.2f} - {:.3f}\n'.format(interval * p.eval_every, m[0], m[1])
+    return ss
 
 
 # ---------- define optimization process ----------
@@ -286,16 +299,25 @@ sess.run(init)
 
 # ---------- variables to save the metrics during optimization ----------
 cm_metrics = ['ACC', 'TPR', 'TNR', 'BAC']
-metrics = cm_metrics + ['pv', 'loss']
+cm_metrics_ci = [m + '_95CI' for m in cm_metrics]
+metrics = cm_metrics + cm_metrics_ci + ['pv', 'loss']
 saved_m = {m: {s: [] for s in samples} for m in metrics}
 
 
+def metric_to_str(metric):
+    if isinstance(metric, float) or isinstance(metric, np.float32):
+        return '{:.3f}'.format(metric)
+    elif isinstance(metric, tuple) and (len(metric) == 2):
+        return '[{:.3f} - {:.3f}]'.format(metric[0], metric[1])
+    return '-'
+
+
 def get_h5_data(source, indices):
-    return list(map(lambda idx: np.expand_dims(source[idx], 3), indices))
+    return list(map(lambda ii: np.expand_dims(source[ii], 3), indices))
 
 
 def get_h5_labels(source, indices):
-    return list(map(lambda idx: source[idx], indices))
+    return list(map(lambda ii: source[ii], indices))
 
 
 # ---------- main optimization loop ----------
@@ -319,7 +341,9 @@ for i in range(p.generations):
         # --- calculate accuracy for train set ---
         cm = get_confusion_matrix(train_preds, train_y, 'confusion matrix for train set', do_print=False)
         for m in cm_metrics:
-            saved_m[m]['train'].append(get_bin_metric(cm, p.main_class_idx, m))
+            v = get_bin_metric(cm, p.main_class_idx, m)
+            saved_m[m]['train'].append(v)
+            saved_m[m + '_95CI']['train'].append(get_metric_ci(v, p.batch_size['train']))
         saved_m['loss']['train'].append(train_loss)
         saved_m['pv']['train'].append(get_p_value(train_preds, train_y))
         # --- calculate accuracy on eval and test set ---
@@ -337,15 +361,16 @@ for i in range(p.generations):
                 t_loss[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _loss
             cm = get_confusion_matrix(t_preds, t_targets, 'Confusion matrix for ' + s + ' set', do_print=True)
             for m in cm_metrics:
-                saved_m[m][s].append(get_bin_metric(cm, p.main_class_idx, m))
+                v = get_bin_metric(cm, p.main_class_idx, m)
+                saved_m[m][s].append(v)
+                saved_m[m + '_95CI'][s].append(get_metric_ci(v, idx[s].size))
             saved_m['loss'][s].append(np.mean(t_loss))
             saved_m['pv'][s].append(get_p_value(t_preds, t_targets))
-        # --- record and print results ---
-        log.get().info('Generation #{}.'.format(i + 1))
-        log.get().info(''.ljust(8) + '\t' + '\t'.join(s.ljust(8) for s in samples))
-        for m in metrics:
-            str_repr = '\t\t'.join('{:2.5f}'.format(saved_m[m][s][-1]) for s in samples)
-            log.get().info(m.ljust(8) + '\t' + str_repr)
+        # --- record and print metrics' values ---
+        metrics_headers = ['it ' + str(i + 1)] + [s for s in samples]
+        metrics_table = [[m] + [metric_to_str(saved_m[m][s][-1]) for s in samples] for m in metrics]
+        log.get().info('\n')
+        log.get().info(tabulate(metrics_table, headers=metrics_headers, tablefmt='orgtbl'))
         log.get().info('\n')
 
 for s in samples:
@@ -364,7 +389,8 @@ def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), met
     text_step = int(eval_indices[-1] * 0.75 / len(samples_test))
     text_pos = int(eval_indices[-1] * 0.05)
     for s in samples_test:
-        plt.text(text_pos, 0.05, estimate_top_mean_and_variation(data_dict[s], s, metric_name), fontsize=7)
+        plt.text(text_pos, 0.05,
+                 estimate_top_mean_and_var(data_dict[s], s, metric_name, mult_factor=p.acc_mult_factor), fontsize=7)
         text_pos += text_step
     plt.xlim(0)
     if y_lim > 0:
@@ -381,8 +407,8 @@ for m in metrics:
 
 # ---------- analyze saved accuracies and p-values ----------
 for s in samples:
-    log.get().info(estimate_top_mean_and_variation(saved_m['ACC'][s], s.title(), 'accuracy'))
-    log.get().info(estimate_top_mean_and_variation(saved_m['pv'][s], s.title(), 'p-value'))
+    log.get().info(estimate_top_mean_and_var(saved_m['ACC'][s], s.title(), 'accuracy', mult_factor=p.acc_mult_factor))
+    log.get().info(estimate_top_mean_and_var(saved_m['pv'][s], s.title(), 'p-value', mult_factor=p.acc_mult_factor))
 
 
 # ---------- save the experiment results ----------
