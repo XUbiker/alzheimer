@@ -15,9 +15,11 @@ experiment_name = str(log_id).zfill(4)
 log = XLogger('./logs/' + experiment_name, full_format=False)
 
 samples = ('train', 'eval', 'test_0', 'test_1', 'test_2')
+sample_to_h5_series = {'train': 'train', 'eval': 'train', 'test_0': 'test_0', 'test_1': 'test_1', 'test_2': 'test2'}
 samples_eval = ('eval', 'test_0', 'test_1', 'test_2')
 samples_test = ('test_0', 'test_1', 'test_2')
 
+sets_dir = cfg.h5_cache_dir + '/sets_10_2/'
 cfg_str = 'AD_NC'
 
 
@@ -25,11 +27,10 @@ class Params:
     def __init__(self):
         self.main_class_idx = cfg.get_label_code('ternary', 'AD')
         self.h5_data_path = {
-            'train': cfg.h5_cache_dir + '/sets_10/alz_train_eval_e5_' + cfg_str + '.h5',
-            'eval': cfg.h5_cache_dir + '/sets_10/alz_train_eval_e5_' + cfg_str + '.h5',
-            'test_0': cfg.h5_cache_dir + '/sets_10/alz_test_e5_' + cfg_str + '.h5',
-            'test_1': cfg.h5_cache_dir + '/sets_10/alz_test_ext_e5_' + cfg_str + '.h5',
-            'test_2': cfg.h5_cache_dir + '/sets_10/alz_test_ext_e5_' + cfg_str + '.h5'
+            'train': sets_dir + 'alz_train_e5_' + cfg_str + '.h5',
+            'test_0': sets_dir + 'alz_test_0_e5_' + cfg_str + '.h5',
+            'test_1': sets_dir + 'alz_test_1_e5_' + cfg_str + '.h5',
+            'test_2': sets_dir + 'alz_test_2_e5_' + cfg_str + '.h5'
         }
         # self.h5_series_path = ('data/smri_L', 'data/smri_R', 'data/md_L', 'data/md_R')
         self.h5_series_path = ('data/smri_L', 'data/smri_R')
@@ -64,7 +65,7 @@ class Params:
 p = Params()
 log.get().info(':::Params:::\n' + str(p) + '\n')
 
-h5 = {s: h5py.File(p.h5_data_path[s], 'r') for s in samples}
+h5 = {s: h5py.File(p.h5_data_path[sample_to_h5_series[s]], 'r') for s in samples}
 data = {s: tuple(h5[s][path] for path in p.h5_series_path) for s in samples}
 labels = {s: h5[s][p.h5_labels_path] for s in samples}
 
