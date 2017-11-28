@@ -56,25 +56,40 @@ def preprocess_set(xset, expand_roi_size=0):
     sets.extend((xset_L, xset_R, xset_LR))
     return sets
 
-# --- Load saved sets ---
-sets_filename = 'sets_10'
-with open(cfg.sets_dir + sets_filename + '.pkl', 'rb') as sets_file:
-    train, valid, test, test_ext = pickle.load(sets_file)
-train_valid = xsets.unite_sets([train, valid], 'alz_train_eval')
 
-# --- Preprocess sets and write them into h5 files ---
-expand_size = 10
-if __name__ == '__main__':
-    h5_dir = cfg.h5_cache_dir + '/' + sets_filename + '/'
-    all_grouped_sets = []
-    for sample_set in (train_valid, test, test_ext):
-        binary_sets = [[], ]
-        # ternary_sets = []
-        for ps in preprocess_set(sample_set, expand_size):
-            # ternary_sets.append(ps)
-            for idx, xset in enumerate(xsets.split_to_binary_sets(ps)):
-                if idx >= len(binary_sets): binary_sets.append([])
-                binary_sets[idx].append(xset)
-        all_grouped_sets.extend(binary_sets)
-        # all_grouped_sets.append(ternary_sets)
-    Parallel(n_jobs=8)(delayed(h5_write_grouped_sets)(i, h5_dir) for i in all_grouped_sets)
+def preprocess_and_write(samples, exp_size, write_ternary, write_binary, n_parallel):
+    # --- Preprocess sets and write them into h5 files ---
+    if __name__ == '__main__':
+        all_grouped_sets = []
+        for _, sample in samples.items():
+            binary_sets = [[], ]
+            ternary_sets = []
+            for ps in preprocess_set(sample, exp_size):
+                if write_ternary:
+                    ternary_sets.append(ps)
+                if write_binary:
+                    for idx, xset in enumerate(xsets.split_to_binary_sets(ps)):
+                        if idx >= len(binary_sets): binary_sets.append([])
+                        binary_sets[idx].append(xset)
+            if write_binary:
+                all_grouped_sets.extend(binary_sets)
+            if write_ternary:
+                all_grouped_sets.append(ternary_sets)
+        Parallel(n_jobs=n_parallel)(delayed(h5_write_grouped_sets)(i, h5_dir) for i in all_grouped_sets)
+
+
+# ---------- sets to h5 params -----------
+sets_filename = 'sets_10_2'
+expand_sizes = (5,)
+write_ternary_sets = False
+write_binary_sets = True
+h5_dir = cfg.h5_cache_dir + '/' + sets_filename + '/'
+
+# ---------- load saved sets, preprocess them and write to h5 files ----------
+with open(cfg.sets_dir + sets_filename + '.pkl', 'rb') as sets_file:
+    sample_sets = pickle.load(sets_file)
+    for exp_size in expand_sizes:
+        preprocess_and_write(
+            sample_sets, exp_size,
+            write_binary=write_binary_sets, write_ternary=write_ternary_sets,
+            n_parallel=6)

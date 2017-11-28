@@ -2,7 +2,7 @@ import sys
 
 # caffe_folder = '/home/xubiker/dev/caffe_modified/'
 
-adni_root = 'C:/dev/ADNI_Multimodal/dataset/'
+adni_root = 'C:/dev/#data/ADNI_Multimodal/dataset/'
 h5_cache_dir = 'c:/dev/alzheimer/h5_cache/'
 sets_dir = 'c:/dev/alzheimer/sets/'
 
