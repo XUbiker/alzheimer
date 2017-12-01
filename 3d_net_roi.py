@@ -4,7 +4,7 @@ import math
 import matplotlib.pyplot as plt
 import ex_config as cfg
 import h5py
-import results_processing
+import results_processing as respr
 import pickle
 import os
 from logger import XLogger
@@ -46,7 +46,7 @@ class Params:
         self.momentum = 0.93
         self.target_size = 3
         self.num_channels = 1
-        self.generations = 100
+        self.generations = 30
         self.eval_every = 10
         self.cv_reshuffle_every = 500
         self.print_weights_every = 500
@@ -57,7 +57,7 @@ class Params:
         self.fc_features = (16,)
         self.n_fc_layers = len(self.fc_features)
         self.dropout = {'train': 0.5, 'eval': 1.0, 'test_0': 1.0, 'test_1': 1.0, 'test_2': 1.0}
-        self.metric_mean_intervals = (1, 5, 10, 20)
+        self.metric_mean_intervals = (0, 1, 5, 10, 20)
         self.plot_type = {'train': 'k--', 'eval': 'g--', 'test_0': 'r-', 'test_1': 'b-', 'test_2': 'y-'}
         self.acc_mult_factor = 100
 
@@ -217,70 +217,10 @@ for s in samples:
     preds[s] = tf.argmax(logits[s], axis=1)
 
 
-def get_confusion_matrix(predictions, expectations, comment='', do_print=True):
-    """
-    Construct a confusion matrix according to expectations and predictions.
-    First index corresponds to predicted value, second - to the expected one.
-    """
-    assert predictions.shape[0] == expectations.shape[0], 'invalid input shape'
-    matrix = np.zeros((p.target_size, p.target_size), dtype=np.int32)
-    for ii in range(predictions.shape[0]):
-        matrix[int(predictions[ii])][int(expectations[ii])] += 1
-    if do_print:
-        str_representation = comment + '\n' + np.array2string(matrix)
-        log.get().info(str_representation)
-    return matrix
-
-
-def get_accuracy(confusion_matrix):
-    return np.trace(confusion_matrix) / np.sum(confusion_matrix)
-
-
-def get_bin_metric(confusion_matrix, class_index, metric):
-    (tp, tn, fp, fn) = (0.0, 0.0, 0.0, 0.0)
-    for ii in range(confusion_matrix.shape[0]):  # predicted
-        for jj in range(confusion_matrix.shape[1]):  # expected
-            if (ii == class_index) and (jj == class_index):
-                tp += confusion_matrix[ii][jj]
-            elif (ii == class_index) and (jj != class_index):
-                fp += confusion_matrix[ii][jj]
-            elif (ii != class_index) and (jj == class_index):
-                fn += confusion_matrix[ii][jj]
-            else:
-                tn += confusion_matrix[ii][jj]
-    return {
-        'ACC': (tp + tn) / (tp + fp + fn + tn) if tp + fp + fn + tn > 0 else 0.0,
-        'TPR': tp / (tp + fn) if tp + fn > 0 else 0.0,
-        'TNR': tn / (tn + fp) if tn + fp > 0 else 0.0,
-        'BAC': 0.5 * (tp / (tp + fn) + tn / (tn + fp)) if (tp + fn)*(tn + fp) > 0 else 0.0
-    }[metric]
-
-
-def get_metric_ci(value, number_of_subjects, confidence=0.95):
-    assert confidence == 0.95, 'unsupported confidence value'
-    assert (value >= 0) and (value <= 1), 'unsupported accuracy range'
-    left = value - 1.96 * math.sqrt(value * (1 - value) / number_of_subjects)
-    right = value + 1.96 * math.sqrt(value * (1 - value) / number_of_subjects)
-    left = max(left, 0.0)
-    right = min(right, 1.0)
-    return left, right
-
-
-def get_p_value(predictions, expectations):
-    assert predictions.shape[0] == expectations.shape[0], 'invalid input shape'
-    exp_unique, exp_count = np.unique(expectations.astype(int), return_counts=True)
-    pred_unique, pred_count = np.unique(predictions.astype(int), return_counts=True)
-    expectations_count = dict(zip(exp_unique, exp_count))
-    predictions_count = dict(zip(pred_unique, pred_count))
-    _predictions = [predictions_count.get(e, 0) for e in expectations_count]
-    _expectations = [expectations_count[e] for e in expectations_count]
-    return results_processing.p_value(_predictions, _expectations)
-
-
 def estimate_top_mean_and_var(values, set_name, metric_name, mult_factor):
     ss = '{} (it|mean|var)\non {}:\n'.format(metric_name, set_name)
     for interval in p.metric_mean_intervals:
-        m = results_processing.top_mean_with_variance(np.asarray(values), interval, mult_factor)
+        m = respr.top_mean_with_variance(np.asarray(values), interval, mult_factor)
         ss += '{}: {:.2f} - {:.3f}\n'.format(interval * p.eval_every, m[0], m[1])
     return ss
 
@@ -298,18 +238,55 @@ init = tf.global_variables_initializer()
 sess.run(init)
 
 # ---------- variables to save the metrics during optimization ----------
-cm_metrics = ['ACC', 'TPR', 'TNR', 'BAC']
-cm_metrics_ci = [m + '_95CI' for m in cm_metrics]
-metrics = cm_metrics + cm_metrics_ci + ['pv', 'loss']
-saved_m = {m: {s: [] for s in samples} for m in metrics}
+metrics_cm = ['ACC', 'TPR', 'TNR', 'BAC']
+metrics_add = ['pv', 'loss']
+metrics_all = metrics_cm + metrics_add
+
+# top-mean metrics:
+metrics = {s: {m: {i: [] for i in p.metric_mean_intervals} for m in metrics_all} for s in samples}
 
 
-def metric_to_str(metric):
-    if isinstance(metric, float) or isinstance(metric, np.float32):
-        return '{:.3f}'.format(metric)
-    elif isinstance(metric, tuple) and (len(metric) == 2):
-        return '[{:.3f} - {:.3f}]'.format(metric[0], metric[1])
-    return '-'
+def append_metric(sample, metric, value):
+    metrics[sample][metric][0].append(value)
+    for mi in p.metric_mean_intervals[1:]:
+        metrics[sample][metric][mi].append(
+            respr.top_mean_with_variance(np.asarray(metrics[sample][metric][0]), mi))
+
+
+def metrics_to_table(iteration_header):
+    metrics_headers = ['it ' + str(iteration_header)] + [s for s in samples]
+    rows = []
+    fmt = lambda x: '{:.4f}+-{:.4f}'.format(x[0], x[1]) if isinstance(x, tuple) else '{:.4f}'.format(x)
+    for m in metrics_all:
+        for mi in p.metric_mean_intervals:
+            row_name = m + ('_' + str(mi) + 'tm' if mi > 0 else '')
+            rows.append([row_name] + [fmt(metrics[s][m][mi][-1]) for s in samples])
+    return tabulate(rows, headers=metrics_headers, tablefmt='orgtbl')
+
+
+def metrics_confidence_intervals(confidence_level=0.95, to_table=True):
+    used_metrics = metrics_cm
+    used_samples = samples_eval
+    sample_sizes = {s: idx[s].size for s in used_samples}
+    metrics_ci = {s: {m: {mi: None for mi in p.metric_mean_intervals} for m in used_metrics} for s in used_samples}
+    for s in used_samples:
+        for m in used_metrics:
+            for mi in p.metric_mean_intervals:
+                v = metrics[s][m][mi][-1]
+                if isinstance(v, tuple):
+                    v = v[0]
+                metrics_ci[s][m][mi] = respr.confidence_interval(v, sample_sizes[s], confidence_level)
+    if to_table:
+        metrics_headers = [str(confidence_level) + ' CI'] + [s for s in used_samples]
+        rows = []
+        fmt = lambda x: '[{:.4f}, {:.4f}]'.format(x[0], x[1])
+        for m in used_metrics:
+            for mi in p.metric_mean_intervals:
+                row_name = m + ('_' + str(mi) + 'tm' if mi > 0 else '')
+                rows.append([row_name] + [fmt(metrics_ci[s][m][mi]) for s in used_samples])
+        return tabulate(rows, headers=metrics_headers, tablefmt='orgtbl')
+    else:
+        return metrics_ci
 
 
 def get_h5_data(source, indices):
@@ -339,13 +316,11 @@ for i in range(p.generations):
     # ---------- evaluate ----------
     if (i + 1) % p.eval_every == 0:
         # --- calculate accuracy for train set ---
-        cm = get_confusion_matrix(train_preds, train_y, 'confusion matrix for train set', do_print=False)
-        for m in cm_metrics:
-            v = get_bin_metric(cm, p.main_class_idx, m)
-            saved_m[m]['train'].append(v)
-            saved_m[m + '_95CI']['train'].append(get_metric_ci(v, p.batch_size['train']))
-        saved_m['loss']['train'].append(train_loss)
-        saved_m['pv']['train'].append(get_p_value(train_preds, train_y))
+        cm = respr.confusion_matrix(p.target_size, train_preds, train_y, 'confusion matrix for train set')
+        for m in metrics_cm:
+            append_metric('train', m, respr.bin_metric(cm, p.main_class_idx, m))
+        append_metric('train', 'loss', np.mean(train_loss))
+        append_metric('train', 'pv', respr.p_value(train_preds, train_y))
         # --- calculate accuracy on eval and test set ---
         for s in samples_eval:
             t_preds = np.zeros(idx[s].size, np.float32)
@@ -359,18 +334,14 @@ for i in range(p.generations):
                 t_targets[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _y
                 t_preds[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _preds
                 t_loss[k * p.batch_size[s]:(k + 1) * p.batch_size[s]] = _loss
-            cm = get_confusion_matrix(t_preds, t_targets, 'Confusion matrix for ' + s + ' set', do_print=True)
-            for m in cm_metrics:
-                v = get_bin_metric(cm, p.main_class_idx, m)
-                saved_m[m][s].append(v)
-                saved_m[m + '_95CI'][s].append(get_metric_ci(v, idx[s].size))
-            saved_m['loss'][s].append(np.mean(t_loss))
-            saved_m['pv'][s].append(get_p_value(t_preds, t_targets))
+            cm = respr.confusion_matrix(p.target_size, t_preds, t_targets, 'Confusion matrix for ' + s + ' set', log)
+            for m in metrics_cm:
+                append_metric(s, m, respr.bin_metric(cm, p.main_class_idx, m))
+            append_metric(s, 'loss', np.mean(t_loss))
+            append_metric(s, 'pv', respr.p_value(t_preds, t_targets))
         # --- record and print metrics' values ---
-        metrics_headers = ['it ' + str(i + 1)] + [s for s in samples]
-        metrics_table = [[m] + [metric_to_str(saved_m[m][s][-1]) for s in samples] for m in metrics]
         log.get().info('\n')
-        log.get().info(tabulate(metrics_table, headers=metrics_headers, tablefmt='orgtbl'))
+        log.get().info(metrics_to_table(i+1))
         log.get().info('\n')
 
 for s in samples:
@@ -380,7 +351,7 @@ for s in samples:
 def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), metric_name='', exp_name=experiment_name,
               y_lim=0):
     plt.clf()
-    for s in samples:
+    for s in data_dict:
         plt.plot(eval_indices, data_dict[s], p.plot_type[s], label=s)
     plt.title(metric_name + ' per generation')
     plt.xlabel('generation')
@@ -389,8 +360,10 @@ def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), met
     text_step = int(eval_indices[-1] * 0.75 / len(samples_test))
     text_pos = int(eval_indices[-1] * 0.05)
     for s in samples_test:
-        plt.text(text_pos, 0.05,
-                 estimate_top_mean_and_var(data_dict[s], s, metric_name, mult_factor=p.acc_mult_factor), fontsize=7)
+        top_means = [metrics[s][metric_name][mi][-1][0] for mi in p.metric_mean_intervals[1:]]
+        w = zip(p.metric_mean_intervals, top_means)
+        text = 'it|top-mean:\n' + '\n'.join(['{}: {:.4f}'.format(v[0]*p.eval_every, v[1]) for v in w])
+        plt.text(text_pos, 0.05, text, fontsize=7)
         text_pos += text_step
     plt.xlim(0)
     if y_lim > 0:
@@ -401,14 +374,13 @@ def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), met
     plt.savefig('./plots/{}_{}.png'.format(exp_name, metric_name), dpi=300)
 
 
-# ========== Draw plots ==========
-for m in metrics:
-    draw_plot(saved_m[m], metric_name=m, y_lim=m in cm_metrics)
+# ---------- Draw plots ----------
+for m in metrics_all:
+    draw_plot({s: metrics[s][m][0] for s in samples}, metric_name=m, y_lim=(m in metrics_cm))
 
 # ---------- analyze saved accuracies and p-values ----------
-for s in samples:
-    log.get().info(estimate_top_mean_and_var(saved_m['ACC'][s], s.title(), 'accuracy', mult_factor=p.acc_mult_factor))
-    log.get().info(estimate_top_mean_and_var(saved_m['pv'][s], s.title(), 'p-value', mult_factor=p.acc_mult_factor))
+log.get().info(metrics_to_table('final') + '\n')
+log.get().info(metrics_confidence_intervals())
 
 
 # ---------- save the experiment results ----------
@@ -418,8 +390,7 @@ class ExperimentResults:
         self.metrics_dict = metrics_dict
 
 
-experiment_results = ExperimentResults({(s, m): saved_m[m][s] for m in metrics for s in samples})
-
+experiment_results = ExperimentResults(metrics)
 with open('./logs/{}.pkl'.format(experiment_name), 'wb') as f:
     pickle.dump(experiment_results, f)
 
