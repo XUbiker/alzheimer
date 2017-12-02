@@ -3,12 +3,19 @@ import numpy as np
 import preprocess as pp
 import h5py
 import os
-import ex_config as cfg
 import xsets
 import copy
 from joblib import Parallel, delayed
+import ex_utils as utl
+from configparser import ConfigParser
+
+
+cfg = ConfigParser()
+cfg.read('config.ini')
+
 
 def h5_write_grouped_sets(xsets, h5_dir, h5_base_name=None):
+    adni_dir = cfg.get('dir', 'adni_dir')
     if h5_base_name is None:
         h5_base_name = xsets[0].name
     print('writing file: %s' % h5_base_name)
@@ -17,7 +24,7 @@ def h5_write_grouped_sets(xsets, h5_dir, h5_base_name=None):
     f = h5py.File(h5_dir + h5_base_name + '.h5', 'w')
     for xset in xsets:
         size = xset.size()
-        shape = pp.apply_preprocess(xset.items[0], cfg.adni_root, img_index=0).shape
+        shape = pp.apply_preprocess(xset.items[0], adni_dir, img_index=0).shape
         print('processing subset: %s (%s)' % (xset.name, xset.tag))
         tag = '' if xset.tag == '' else '_' + xset.tag
         data_smri = f.create_dataset('data/smri' + tag, shape=(size,) + shape, dtype=np.float32)
@@ -25,15 +32,15 @@ def h5_write_grouped_sets(xsets, h5_dir, h5_base_name=None):
         labels = f.create_dataset('labels/labels' + tag, shape=(size,), dtype=np.float32)
         for i in range(size):
             print('writing instance %d of %d' % (i + 1, size))
-            data_smri[i] = pp.apply_preprocess(xset.items[i], cfg.adni_root, img_index=0) * scale
-            data_md[i] = pp.apply_preprocess(xset.items[i], cfg.adni_root, img_index=1) * scale
-            labels[i] = cfg.get_label_code(label_family='ternary', label=xset.items[i].label)
+            data_smri[i] = pp.apply_preprocess(xset.items[i], adni_dir, img_index=0) * scale
+            data_md[i] = pp.apply_preprocess(xset.items[i], adni_dir, img_index=1) * scale
+            labels[i] = utl.get_label_code(label_family='ternary', label=xset.items[i].label)
     f.close()
     print('done!')
 
 
 def h5_write(xset, h5_dir):
-    h5_write_grouped_sets((xset), h5_dir, xset.name)
+    h5_write_grouped_sets((xset,), h5_dir, xset.name)
 
 
 def preprocess_set(xset, expand_roi_size=0):
@@ -57,7 +64,7 @@ def preprocess_set(xset, expand_roi_size=0):
     return sets
 
 
-def preprocess_and_write(samples, exp_size, write_ternary, write_binary, n_parallel):
+def preprocess_and_write(h5_dir, samples, exp_size, write_ternary, write_binary, n_parallel):
     # --- Preprocess sets and write them into h5 files ---
     if __name__ == '__main__':
         all_grouped_sets = []
@@ -78,18 +85,15 @@ def preprocess_and_write(samples, exp_size, write_ternary, write_binary, n_paral
         Parallel(n_jobs=n_parallel)(delayed(h5_write_grouped_sets)(i, h5_dir) for i in all_grouped_sets)
 
 
-# ---------- sets to h5 params -----------
-sets_filename = 'sets_10_2'
-expand_sizes = (5,)
-write_ternary_sets = False
-write_binary_sets = True
-h5_dir = cfg.h5_cache_dir + '/' + sets_filename + '/'
-
 # ---------- load saved sets, preprocess them and write to h5 files ----------
-with open(cfg.sets_dir + sets_filename + '.pkl', 'rb') as sets_file:
+with open(cfg.get('dir', 'sets_dir') + cfg.get('augment', 'sample_filename'), 'rb') as sets_file:
     sample_sets = pickle.load(sets_file)
-    for exp_size in expand_sizes:
+    for exp_size in list(map(int, cfg.get('samples', 'exp_sizes').split(','))):
         preprocess_and_write(
-            sample_sets, exp_size,
-            write_binary=write_binary_sets, write_ternary=write_ternary_sets,
-            n_parallel=6)
+            h5_dir=cfg.get('dir', 'h5_cache_dir') + cfg.get('augment', 'sample_filename') + '/',
+            samples=sample_sets,
+            exp_size=exp_size,
+            write_binary=cfg.getboolean('samples', 'write_binary'),
+            write_ternary=cfg.getboolean('samples', 'write_ternary'),
+            n_parallel=6
+        )

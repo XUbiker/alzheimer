@@ -53,3 +53,22 @@ def debug_plot_median_slices(np_data, print_slices=False):
     if print_slices: print(slc)
     plt.matshow(slc, interpolation='nearest', cmap='gray')
     plt.show()
+
+
+_codes = {
+    'ternary': { 'NC': 0, 'MCI': 1, 'AD': 2 },
+    'AD-MCI': { 'MCI': 0, 'AD': 1 },
+    'MCI-NC': { 'NC': 0, 'MCI': 1 },
+    'AD-NC': { 'NC': 0, 'AD': 1 },
+}
+
+def get_bin_label_families(label=None):
+    return {
+        None:  ('AD-MCI', 'MCI-NC', 'AD-NC'),
+        'AD':  ('AD-MCI', 'AD-NC'),
+        'MCI': ('AD-MCI', 'MCI-NC'),
+        'NC':  ('AD-NC', 'MCI-NC')
+    }[label]
+
+def get_label_code(label_family, label):
+    return _codes[label_family][label]

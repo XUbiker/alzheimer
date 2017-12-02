@@ -65,18 +65,3 @@ def bin_metric(confusion_matrix, class_index, metric):
         'TNR': tn / (tn + fp) if tn + fp > 0 else 0.0,
         'BAC': 0.5 * (tp / (tp + fn) + tn / (tn + fp)) if (tp + fn)*(tn + fp) > 0 else 0.0
     }[metric]
-
-
-# def p_value(observations, expectations):
-#     return chisquare(observations, expectations)[1]
-
-# print(p_value([10, 190], [100, 100]))
-
-# data = np.array([1, 2, 3, 4])
-# tm = top_mean_with_variance(data, 2)
-# print(tm)
-
-
-# a = np.array([0, 3, 0, 1, 0, 1, 2, 1, 0, 0, 0, 0, 1, 3, 4])
-# unique, counts = np.unique(a, return_counts=True)
-# print(dict(zip(unique, counts)))

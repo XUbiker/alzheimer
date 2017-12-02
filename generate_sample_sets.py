@@ -3,9 +3,13 @@ import random
 import os
 from xsets import XSet, XSetItem
 from preprocess import AugmParams, PreprocessParams
-import ex_config as cfg
 import pickle
 import ex_utils
+from configparser import ConfigParser
+
+
+cfg = ConfigParser()
+cfg.read('config.ini')
 
 
 def generate_augm_set(dirs_with_labels, new_size, max_augm_params):
@@ -93,28 +97,16 @@ def generate_samples_from_adni2(adni_root, max_augm_params, augm_factor, prefix_
     return sample_sets
 
 
-def save_params(params, file_path):
-    with open(file_path, 'wb') as f:
-        pickle.dump(params, f)
-
-
-def generate_sets(file_path, params, debug=True):
-    sample_sets = generate_samples_from_adni2(
-        params['adni_root'],
-        params['max_augm'], test_prc=params['test_prc'],
-        augm_factor=params['augm_factor'],
-        prefix_name=params['prefix_name'],
-        shuffle_data=False, debug=debug
-    )
-    ex_utils.save_pickle(sample_sets, file_path)
-
-
-lists_params = {
-    'adni_root': cfg.adni_root,
-    'prefix_name': 'alz',
-    'max_augm': AugmParams(shift=(2, 2, 2), sigma=1.2),
-    'test_prc': 0.25,
-    'augm_factor': 20
-}
-
-generate_sets('./sets/sets_10_2.pkl', lists_params, debug=True)
+file_path = cfg.get('dir', 'sets_dir') + cfg.get('augment', 'sample_filename')
+max_shift = cfg.getint('augment', 'max_shift')
+max_sigma = cfg.getfloat('augment', 'max_sigma')
+sample_sets = generate_samples_from_adni2(
+    adni_root=cfg.get('dir', 'adni_dir'),
+    max_augm_params=AugmParams(shift=(max_shift, max_shift, max_shift), sigma=max_sigma),
+    test_prc=cfg.getfloat('samples', 'test_prc'),
+    augm_factor=cfg.getint('augment', 'factor'),
+    prefix_name=cfg.get('samples', 'prefix'),
+    shuffle_data=False,
+    debug=True
+)
+ex_utils.save_pickle(sample_sets, file_path)

@@ -2,31 +2,36 @@ import tensorflow as tf
 import numpy as np
 import math
 import matplotlib.pyplot as plt
-import ex_config as cfg
 import h5py
 import results_processing as respr
 import pickle
 import os
+import ex_utils as utl
 from logger import XLogger
 from tabulate import tabulate
+from configparser import ConfigParser
 
-logs = sorted(l if '.' not in l else os.path.split(l)[0] for l in os.listdir("./logs/"))
+
+cfg = ConfigParser()
+cfg.read('config.ini')
+
+logs = sorted(l if '.' not in l else os.path.split(l)[0] for l in os.listdir(cfg.get('dir', 'log_dir')))
 log_id = 0 if not logs else int(logs[-1]) + 1
 experiment_name = str(log_id).zfill(4)
-log = XLogger('./logs/' + experiment_name, full_format=False)
+log = XLogger(cfg.get('dir', 'log_dir') + experiment_name, full_format=False)
 
 samples = ('train', 'eval', 'test_0', 'test_1', 'test_2')
 sample_to_h5_series = {'train': 'train', 'eval': 'train', 'test_0': 'test_0', 'test_1': 'test_1', 'test_2': 'test_2'}
 samples_eval = ('eval', 'test_0', 'test_1', 'test_2')
 samples_test = ('test_0', 'test_1', 'test_2')
 
-sets_dir = cfg.h5_cache_dir + '/sets_10_2/'
+sets_dir = cfg.get('dir', 'h5_cache_dir') + '/sets_10_2/'
 cfg_str = 'AD_NC'
 
 
 class Params:
     def __init__(self):
-        self.main_class_idx = cfg.get_label_code('ternary', 'AD')
+        self.main_class_idx = utl.get_label_code('ternary', 'AD')
         self.h5_data_path = {
             'train': sets_dir + 'alz_train_e5_' + cfg_str + '.h5',
             'test_0': sets_dir + 'alz_test_0_e5_' + cfg_str + '.h5',
@@ -371,7 +376,7 @@ def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), met
     else:
         plt.ylim(0)
     # plt.show()
-    plt.savefig('./plots/{}_{}.png'.format(exp_name, metric_name), dpi=300)
+    plt.savefig(cfg.get('dir', 'plot_dir') + '/{}_{}.png'.format(exp_name, metric_name), dpi=300)
 
 
 # ---------- Draw plots ----------
@@ -391,7 +396,7 @@ class ExperimentResults:
 
 
 experiment_results = ExperimentResults(metrics)
-with open('./logs/{}.pkl'.format(experiment_name), 'wb') as f:
+with open(cfg.get('dir', 'log_dir') + '{}.pkl'.format(experiment_name), 'wb') as f:
     pickle.dump(experiment_results, f)
 
 log.get().info("\nDONE!")
