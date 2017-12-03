@@ -366,7 +366,7 @@ def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), met
     text_pos = int(eval_indices[-1] * 0.05)
     for s in samples_test:
         top_means = [metrics[s][metric_name][mi][-1][0] for mi in p.metric_mean_intervals[1:]]
-        w = zip(p.metric_mean_intervals, top_means)
+        w = zip(p.metric_mean_intervals[1:], top_means)
         text = 'it|top-mean:\n' + '\n'.join(['{}: {:.4f}'.format(v[0]*p.eval_every, v[1]) for v in w])
         plt.text(text_pos, 0.05, text, fontsize=7)
         text_pos += text_step
