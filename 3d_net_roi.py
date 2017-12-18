@@ -25,7 +25,7 @@ sample_to_h5_series = {'train': 'train', 'eval': 'train', 'test_0': 'test_0', 't
 samples_eval = ('eval', 'test_0', 'test_1', 'test_2')
 samples_test = ('test_0', 'test_1', 'test_2')
 
-sets_dir = cfg.get('dir', 'h5_cache_dir') + '/sets_10_2/'
+sets_dir = cfg.get('dir', 'h5_cache_dir') + '/sets_10_6_e5/'
 cfg_str = 'AD_NC'
 
 
@@ -44,25 +44,26 @@ class Params:
         # self.h5_series_path = ('data/smri_LR', 'data/md_LR')
         self.n_series = len(self.h5_series_path)
         self.h5_labels_path = 'labels/labels_L'
-        self.batch_size = {'train': 1, 'eval': 1, 'test_0': 1, 'test_1': 1, 'test_2': 1}
+        self.batch_size = {'train': 10, 'eval': 1, 'test_0': 1, 'test_1': 1, 'test_2': 1}
+        self.n_mini_batches = 5
         self.start_learning_rate = 0.01
         self.decay_iterations = 100
         self.decay_rate = 0.8
         self.momentum = 0.93
         self.target_size = 3
         self.num_channels = 1
-        self.generations = 30
+        self.generations = 100
         self.eval_every = 10
         self.cv_reshuffle_every = 500
         self.print_weights_every = 500
-        self.conv_kernels = (5, 4, 3, 3, 3)
-        self.pool_kernels = (2, 2, 2, 2, 2)
-        self.conv_features = (16, 32, 64, 128, 128)
+        self.conv_kernels = (5, 4, 3, 3)
+        self.pool_kernels = (2, 2, 2, 2)
+        self.conv_features = (16, 32, 64, 128)
         self.n_conv_layers = len(self.conv_kernels)
         self.fc_features = (16,)
         self.n_fc_layers = len(self.fc_features)
         self.dropout = {'train': 0.5, 'eval': 1.0, 'test_0': 1.0, 'test_1': 1.0, 'test_2': 1.0}
-        self.metric_mean_intervals = (0, 1, 5, 10, 20)
+        self.metric_mean_intervals = (0, 1, 5, 10, 20, 30)
         self.plot_type = {'train': 'k--', 'eval': 'g--', 'test_0': 'r-', 'test_1': 'b-', 'test_2': 'y-'}
         self.acc_mult_factor = 100
 
@@ -237,6 +238,14 @@ learning_rate = tf.train.exponential_decay(p.start_learning_rate, global_step, p
 optimizer = tf.train.MomentumOptimizer(learning_rate, p.momentum, use_nesterov=True)
 train_step = optimizer.minimize(loss['train'], global_step=global_step)
 
+# ---------- define optimization process using mini-batches ----------
+tvs = tf.trainable_variables()
+accum_vars = [tf.Variable(tf.zeros_like(v.initialized_value()), trainable=False) for v in tvs]
+zero_ops = [v.assign(tf.zeros_like(v)) for v in accum_vars]
+gradients = optimizer.compute_gradients(loss['train'], tvs)
+accum_ops = [accum_vars[i].assign_add(gv[0]) for i, gv in enumerate(gradients)]
+train_step_with_acc = optimizer.apply_gradients([(accum_vars[i], gv[1]) for i, gv in enumerate(gradients)])
+
 # ------- Initialize Variables ----------
 sess = tf.Session()
 init = tf.global_variables_initializer()
@@ -244,7 +253,8 @@ sess.run(init)
 
 # ---------- variables to save the metrics during optimization ----------
 metrics_cm = ['ACC', 'TPR', 'TNR', 'BAC']
-metrics_add = ['pv', 'loss']
+# metrics_add = ['pv', 'loss']
+metrics_add = ['loss',]
 metrics_all = metrics_cm + metrics_add
 
 # top-mean metrics:
@@ -285,10 +295,12 @@ def metrics_confidence_intervals(confidence_level=0.95, to_table=True):
         metrics_headers = [str(confidence_level) + ' CI'] + [s for s in used_samples]
         rows = []
         fmt = lambda x: '[{:.4f}, {:.4f}]'.format(x[0], x[1])
+        fmt2 = lambda x: '+-{:.4f}'.format((x[1] - x[0]) / 2)
         for m in used_metrics:
             for mi in p.metric_mean_intervals:
                 row_name = m + ('_' + str(mi) + 'tm' if mi > 0 else '')
                 rows.append([row_name] + [fmt(metrics_ci[s][m][mi]) for s in used_samples])
+                rows.append([row_name] + [fmt2(metrics_ci[s][m][mi]) for s in used_samples])
         return tabulate(rows, headers=metrics_headers, tablefmt='orgtbl')
     else:
         return metrics_ci
@@ -308,24 +320,39 @@ for i in range(p.generations):
     if (i + 1) % p.cv_reshuffle_every == 0:
         log.get().info('Performing cross-validation reshuffling')
         idx['train'], idx['eval'] = cross_validation_reshuffle(data['train'][0])
-    # ---------- train ----------
-    r_idx = np.random.choice(idx['train'], size=p.batch_size['train'])
-    train_x = tuple(np.asarray(get_h5_data(j, r_idx)) for j in data['train'])
-    train_y = np.asarray(get_h5_labels(labels['train'], r_idx))
-    d = {input_data['train']: train_x, target['train']: train_y, keep_prob: p.dropout['train']}
-    sess.run(train_step, feed_dict=d)
-    train_loss, train_preds = sess.run([loss['train'], preds['train']], feed_dict=d)
+    # ---------- train with mini-batches ----------
+    sess.run(zero_ops)
+    train_idx = np.random.choice(idx['train'], size=p.batch_size['train'] * p.n_mini_batches)
+    for mb in range(p.n_mini_batches):
+        mini_batch_idx = train_idx[mb * p.batch_size['train']: (mb + 1) * p.batch_size['train']]
+        train_x = tuple(np.asarray(get_h5_data(j, mini_batch_idx)) for j in data['train'])
+        train_y = np.asarray(get_h5_labels(labels['train'], mini_batch_idx))
+        d = {input_data['train']: train_x, target['train']: train_y, keep_prob: p.dropout['train']}
+        sess.run(accum_ops, feed_dict=d)
+    sess.run(train_step_with_acc)
+    train_loss = np.zeros(p.batch_size['train'] * p.n_mini_batches)
+    train_exps = np.zeros(p.batch_size['train'] * p.n_mini_batches)
+    train_preds = np.zeros(p.batch_size['train'] * p.n_mini_batches)
+    for mb in range(p.n_mini_batches):
+        mini_batch_idx = train_idx[mb * p.batch_size['train']: (mb + 1) * p.batch_size['train']]
+        train_x = tuple(np.asarray(get_h5_data(j, mini_batch_idx)) for j in data['train'])
+        train_y = np.asarray(get_h5_labels(labels['train'], mini_batch_idx))
+        d = {input_data['train']: train_x, target['train']: train_y, keep_prob: p.dropout['train']}
+        _loss, _preds = sess.run([loss['train'], preds['train']], feed_dict=d)
+        train_loss[mb * p.batch_size['train'] : (mb+1) * p.batch_size['train']] = _loss
+        train_preds[mb * p.batch_size['train'] : (mb+1) * p.batch_size['train']] = _preds
+        train_exps[mb * p.batch_size['train'] : (mb+1) * p.batch_size['train']] = train_y
     # ---------- print weights ----------
     if (i + 1) % p.print_weights_every == 0:
         print_weights(sess)
     # ---------- evaluate ----------
     if (i + 1) % p.eval_every == 0:
         # --- calculate accuracy for train set ---
-        cm = respr.confusion_matrix(p.target_size, train_preds, train_y, 'confusion matrix for train set')
+        cm = respr.confusion_matrix(p.target_size, train_preds, train_exps, 'confusion matrix for train set')
         for m in metrics_cm:
             append_metric('train', m, respr.bin_metric(cm, p.main_class_idx, m))
         append_metric('train', 'loss', np.mean(train_loss))
-        append_metric('train', 'pv', respr.p_value(train_preds, train_y))
+        # append_metric('train', 'pv', respr.p_value(train_preds, train_exps))
         # --- calculate accuracy on eval and test set ---
         for s in samples_eval:
             t_preds = np.zeros(idx[s].size, np.float32)
@@ -343,7 +370,7 @@ for i in range(p.generations):
             for m in metrics_cm:
                 append_metric(s, m, respr.bin_metric(cm, p.main_class_idx, m))
             append_metric(s, 'loss', np.mean(t_loss))
-            append_metric(s, 'pv', respr.p_value(t_preds, t_targets))
+            # append_metric(s, 'pv', respr.p_value(t_preds, t_targets))
         # --- record and print metrics' values ---
         log.get().info('\n')
         log.get().info(metrics_to_table(i+1))
@@ -367,7 +394,8 @@ def draw_plot(data_dict, eval_indices=range(0, p.generations, p.eval_every), met
     for s in samples_test:
         top_means = [metrics[s][metric_name][mi][-1][0] for mi in p.metric_mean_intervals[1:]]
         w = zip(p.metric_mean_intervals[1:], top_means)
-        text = 'it|top-mean:\n' + '\n'.join(['{}: {:.4f}'.format(v[0]*p.eval_every, v[1]) for v in w])
+        text = 'sample {}\nit|top-mean:\n'.format(s)\
+               + '\n'.join(['{}: {:.4f}'.format(v[0]*p.eval_every, v[1]) for v in w])
         plt.text(text_pos, 0.05, text, fontsize=7)
         text_pos += text_step
     plt.xlim(0)

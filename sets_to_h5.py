@@ -25,17 +25,29 @@ def h5_write_grouped_sets(xsets, h5_dir, h5_base_name=None):
     for xset in xsets:
         size = xset.size()
         shape = pp.apply_preprocess(xset.items[0], adni_dir, img_index=0).shape
-        print('processing subset: %s (%s)' % (xset.name, xset.tag))
+        print('processing subset: %s (%s) [%d samples]' % (xset.name, xset.tag, xset.size()))
         tag = '' if xset.tag == '' else '_' + xset.tag
         data_smri = f.create_dataset('data/smri' + tag, shape=(size,) + shape, dtype=np.float32)
         data_md = f.create_dataset('data/md' + tag, shape=(size,) + shape, dtype=np.float32)
         labels = f.create_dataset('labels/labels' + tag, shape=(size,), dtype=np.float32)
+        patients = f.create_dataset('patients' + tag, shape=(size,), dtype=h5py.special_dtype(vlen=str))
         for i in range(size):
             print('writing instance %d of %d' % (i + 1, size))
             data_smri[i] = pp.apply_preprocess(xset.items[i], adni_dir, img_index=0) * scale
             data_md[i] = pp.apply_preprocess(xset.items[i], adni_dir, img_index=1) * scale
             labels[i] = utl.get_label_code(label_family='ternary', label=xset.items[i].label)
+            patients[i] = str(xset.items[i])
     f.close()
+
+    # --- check resulting h5 file ---
+    # f = h5py.File(h5_dir + h5_base_name + '.h5', 'r')
+    # for xset in xsets:
+    #     tag = '' if xset.tag == '' else '_' + xset.tag
+    #     print(f['patients' + tag])
+    #     for s in range(xset.size()):
+    #         print(f['patients'+tag][s])
+    # f.close()
+
     print('done!')
 
 
